@@ -1,0 +1,5 @@
+python-telegram-bot[job-queue]==22.5
+matplotlib>=3.9,<4
+python-dotenv>=1.0
+tzdata
+pytest>=8
