@@ -10,22 +10,23 @@ Mark each line pass/fail. Dates assume you run it on the day; adjust the expecte
 5. `/help` → help text with examples and commands.
 
 ## Logging
-6. `15 lunch` → "Logged £15.00 · Eating Out · lunch · today" with [Undo] [Change category].
+6. `15 lunch` → "Logged £15.00 · Eating Out · Lunch · today" with [Undo] [Change category].
 7. `lunch 4.50` → same pattern, £4.50.
 8. `20 groceries yesterday` → "· yesterday".
 9. `150 flights 31/12/26` → "Planned £150.00 · Travel · flights · 31 Dec 2026".
 10. `12 xyzzy` → "Logged £12.00 · Other · xyzzy · today" plus "Pick a category:" and 12 buttons. Tap **Gifts** → message becomes "· Gifts ·". Then `3 xyzzy` → logs straight to Gifts (word learned).
 11. On any logged entry, tap [Change category] → buttons; pick one → message updates.
-12. `15,50 lunch` → "Try 15 lunch or 150 flights 31/12/26." (Review Focus 1: never £1,550)
+12. `15,50 lunch` → the "Not quite!" cheat sheet (Review Focus 1: never £1,550)
 13. `0 lunch` → "Amount must be more than 0 and at most 1,000,000."
 14. `10 x 31/02` → "That date doesn't exist."
 15. `hello` → example reply.
 
 ## Undo, recent, edit
 16. `5 test` then tap its [Undo] → "Deleted £5.00 · Other · test · today".
-17. Tap that same [Undo] again (scroll up) → "That entry no longer exists." (Review Focus 5)
+17. `6 stale`, then `/recent` and tap [Delete] on "stale". Scroll up to the original "Logged £6.00 ... stale" message and tap its [Undo] → "That entry no longer exists." (Review Focus 5)
+17b. Edit a message you already sent (long-press, Edit, change `6 stale` to `7 stale`) → "Edits to sent messages aren't tracked. Use /recent to change an entry."
 18. `/undo` → shows latest entry with [Delete] [Keep]. Tap **Keep** → "Kept." `/undo` again, tap **Delete** → "Deleted ...".
-19. `/recent` → up to 10 messages with [Edit] [Delete].
+19. `/recent` → up to 5 messages with [Edit] [Delete]. `/recent 12` → up to 12. `/recent 50` → "Use /recent, or /recent 10 for more (up to 20)."
 20. Tap [Edit] on one → prompt. Send `hello` → example reply (still editing). Send `16 lunch` → "Updated £16.00 · Eating Out · lunch · today".
 21. Tap [Edit] again, then `/cancel` → "Edit cancelled."
 
@@ -33,7 +34,8 @@ Mark each line pass/fail. Dates assume you run it on the day; adjust the expecte
 22. `/upcoming` → "Planned payments: £150.00 in total" then the flights line with [Delete].
 23. `/recurring 12 netflix monthly` → "Recurring £12.00 · Subscriptions · netflix · monthly from today".
 24. `/recurring 12 netflix` → "Try /recurring 12 netflix monthly or /recurring 950 rent monthly 01/11."
-25. `/recurring` → "Recurring payments:" then netflix with [Stop]. Tap **Stop** → "Stopped: £12.00 netflix monthly". Tap it again → "That entry no longer exists."
+25. `/recurring` twice (two copies of the list). Tap **Stop** on netflix in the first → "Stopped: £12.00 netflix monthly". Tap **Stop** on netflix in the second copy → "That entry no longer exists."
+25b. `/recurring 5 coffee weekly 01/10/2006` → "Use a date from last year up to 10 years ahead."
 
 ## Reports
 26. `/report` → chart image (pace + categories) then text: Spent, No-spend days, the "Comparisons start once you have a full month of data." note, By category, Where to save, Patterns, Coming up.

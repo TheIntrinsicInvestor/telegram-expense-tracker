@@ -7,7 +7,12 @@ from datetime import date, timedelta
 from expense_bot.money import round2
 from expense_bot.recurring import FREQUENCIES
 
-HELP_EXAMPLE = "Try 15 lunch or 150 flights 31/12/26."
+HELP_EXAMPLE = (
+    "Not quite! Start with the amount, then what it was:\n\n"
+    "15 lunch  (today)\n"
+    "12 taxi 03/10  (a past date)\n"
+    "150 flights 31/12/26  (planned)"
+)
 AMOUNT_RANGE_ERROR = "Amount must be more than 0 and at most 1,000,000."
 BAD_DATE_ERROR = "That date doesn't exist."
 RECURRING_HELP = "Try /recurring 12 netflix monthly or /recurring 950 rent monthly 01/11."
@@ -45,6 +50,14 @@ class ParsedRecurring:
 @dataclass(frozen=True)
 class ParseError:
     message: str
+
+
+def tidy_note(words: list[str]) -> str:
+    """Join note words and capitalise the first letter, leaving words like 'iPhone' as typed."""
+    note = " ".join(words)
+    if note[:1].islower() and not note[1:2].isupper():
+        note = note[0].upper() + note[1:]
+    return note
 
 
 def parse_amount(token: str) -> float | ParseError | None:
@@ -119,7 +132,7 @@ def parse_entry(text: str, today: date) -> ParsedEntry | ParseError:
         return ParseError(HELP_EXAMPLE)
     if isinstance(amount, ParseError):
         return amount
-    return ParsedEntry(amount, " ".join(rest), entry_date)
+    return ParsedEntry(amount, tidy_note(rest), entry_date)
 
 
 def parse_recurring(args: list[str], today: date) -> ParsedRecurring | ParseError:
@@ -142,4 +155,4 @@ def parse_recurring(args: list[str], today: date) -> ParsedRecurring | ParseErro
         return ParseError(RECURRING_HELP)
     if isinstance(amount, ParseError):
         return amount
-    return ParsedRecurring(amount, " ".join(tokens[1:-1]), tokens[-1].lower(), start)
+    return ParsedRecurring(amount, tidy_note(tokens[1:-1]), tokens[-1].lower(), start)

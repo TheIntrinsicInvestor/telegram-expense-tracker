@@ -18,7 +18,7 @@ lunch 15
 
 Commands
 /undo  delete your latest entry
-/recent  your last 10 entries, to edit or delete
+/recent  your last 5 entries, to edit or delete (/recent 20 shows more)
 /report  this month (also: /report week, /report lastmonth, /report year)
 /upcoming  planned payments
 /recurring 12 netflix monthly  a repeating payment (/recurring alone lists them)

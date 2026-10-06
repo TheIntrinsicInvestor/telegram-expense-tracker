@@ -196,9 +196,26 @@ async def cmd_undo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                                     reply_markup=keyboard)
 
 
+RECENT_DEFAULT = 5
+RECENT_MAX = 20
+
+
+def recent_limit(args: list[str]) -> int | None:
+    """'/recent' → 5, '/recent 12' → 12; None for anything outside 1..20."""
+    if not args:
+        return RECENT_DEFAULT
+    if args[0].isdigit() and 1 <= int(args[0]) <= RECENT_MAX:
+        return int(args[0])
+    return None
+
+
 async def cmd_recent(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     conn, user, today = _user(update, context)
-    entries = db.recent_entries(conn, user.user_id)
+    limit = recent_limit(context.args)
+    if limit is None:
+        await update.message.reply_text(f"Use /recent, or /recent 10 for more (up to {RECENT_MAX}).")
+        return
+    entries = db.recent_entries(conn, user.user_id, limit)
     if not entries:
         await update.message.reply_text("No entries yet.")
         return
@@ -380,7 +397,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 BOT_COMMANDS = [
     ("report", "Spending report (week, lastmonth, year)"),
-    ("recent", "Last 10 entries"),
+    ("recent", "Last 5 entries (/recent 20 for more)"),
     ("undo", "Delete your latest entry"),
     ("upcoming", "Planned payments"),
     ("recurring", "Repeating payments"),

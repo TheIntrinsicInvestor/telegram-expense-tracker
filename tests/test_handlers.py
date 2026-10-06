@@ -55,3 +55,12 @@ def test_error_text_entry_not_saved():
 def test_error_text_for_commands_is_neutral():
     update = Update(update_id=7, message=message("/report"))
     assert handlers.error_text(update, {}) == COMMAND_ERROR
+
+
+import pytest  # noqa: E402
+
+
+@pytest.mark.parametrize("args, expected", [([], 5), (["12"], 12), (["20"], 20), (["21"], None), (["0"], None),
+                                            (["x"], None)])
+def test_recent_limit(args, expected):
+    assert handlers.recent_limit(args) == expected
