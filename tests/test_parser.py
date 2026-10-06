@@ -80,3 +80,18 @@ def test_year_rollover_backfill():
 )
 def test_parse_recurring(args, expected):
     assert parse_recurring(args, TODAY) == expected
+
+
+def test_year_typo_is_rejected():
+    from expense_bot.parser import DATE_RANGE_ERROR
+    assert parse_entry("5 coffee 01/10/2006", TODAY) == ParseError(DATE_RANGE_ERROR)
+    assert parse_entry("5 coffee 01/10/0001", TODAY) == ParseError(DATE_RANGE_ERROR)
+    assert parse_entry("5 coffee 01/10/2040", TODAY) == ParseError(DATE_RANGE_ERROR)
+    assert parse_entry("5 coffee 01/10/25", TODAY) == ParsedEntry(5.0, "coffee", date(2025, 10, 1))
+
+
+def test_recurring_start_at_most_31_days_back():
+    from expense_bot.parser import RECURRING_START_ERROR
+    assert parse_recurring(["5", "coffee", "weekly", "01/10/2025"], TODAY) == ParseError(RECURRING_START_ERROR)
+    assert parse_recurring(["5", "coffee", "weekly", "05/09/26"], TODAY) == ParsedRecurring(
+        5.0, "coffee", "weekly", date(2026, 9, 5))

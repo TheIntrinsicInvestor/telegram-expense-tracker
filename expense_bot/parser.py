@@ -11,9 +11,15 @@ HELP_EXAMPLE = "Try 15 lunch or 150 flights 31/12/26."
 AMOUNT_RANGE_ERROR = "Amount must be more than 0 and at most 1,000,000."
 BAD_DATE_ERROR = "That date doesn't exist."
 RECURRING_HELP = "Try /recurring 12 netflix monthly or /recurring 950 rent monthly 01/11."
+DATE_RANGE_ERROR = "Use a date from last year up to 10 years ahead."
+RECURRING_START_ERROR = "A recurring payment can start at most 31 days ago."
 
 MAX_AMOUNT = 1_000_000
 BACKFILL_DAYS = 7
+# Bounds on explicit years, so a typo like 2006 can't create years of entries.
+YEARS_BACK = 1
+YEARS_AHEAD = 10
+RECURRING_MAX_DAYS_BACK = 31
 
 _AMOUNT_RE = re.compile(r"^[£$€]?(\d{1,3}(?:,\d{3})+|\d+)(\.\d{1,2})?$")
 _DATE_RE = re.compile(r"^(\d{1,2})/(\d{1,2})(?:/(\d{2}|\d{4}))?$")
@@ -70,6 +76,8 @@ def resolve_date(token: str, today: date) -> date | ParseError | None:
     day, month, year_text = int(match.group(1)), int(match.group(2)), match.group(3)
     if year_text:
         year = int(year_text) + (2000 if len(year_text) == 2 else 0)
+        if not today.year - YEARS_BACK <= year <= today.year + YEARS_AHEAD:
+            return ParseError(DATE_RANGE_ERROR)
         return _make_date(year, month, day) or ParseError(BAD_DATE_ERROR)
 
     # No year: backfill if it fell within the past week, otherwise the next occurrence.
@@ -125,6 +133,8 @@ def parse_recurring(args: list[str], today: date) -> ParsedRecurring | ParseErro
         if when is not None:
             start = when
             tokens = tokens[:-1]
+    if (today - start).days > RECURRING_MAX_DAYS_BACK:
+        return ParseError(RECURRING_START_ERROR)
     if len(tokens) < 2 or tokens[-1].lower() not in FREQUENCIES:
         return ParseError(RECURRING_HELP)
     amount = parse_amount(tokens[0])
