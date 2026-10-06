@@ -23,13 +23,16 @@ from expense_bot.categories import CATEGORIES, first_word, resolve
 from expense_bot.charts import render_report_chart
 from expense_bot.clock import local_today, utc_now
 from expense_bot.formatting import (
+    COMMAND_ERROR,
     DELETE_WARNING,
+    EDIT_NOT_TRACKED,
     EXPORT_WARNING,
     GENERIC_ERROR,
     HELP_TEXT,
     NO_RECURRING,
     PRIVACY_TEXT,
     RATE_LIMITED,
+    SAVED_UNCONFIRMED,
     STALE,
     date_label,
     export_csv,
@@ -117,12 +120,14 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             return
         db.update_entry(conn, user.user_id, editing, parsed.amount, category or old.category, parsed.note,
                         parsed.date, today)
+        context.user_data["saved_update"] = update.update_id
         entry = db.get_entry(conn, user.user_id, editing)
         text = format_logged(entry, user.currency, today)
         await update.message.reply_text("Updated " + text.split(" ", 1)[1], reply_markup=logged_keyboard(entry.id))
         return
 
     entry_id = db.add_entry(conn, user.user_id, parsed.amount, category or "Other", parsed.note, parsed.date, today)
+    context.user_data["saved_update"] = update.update_id
     entry = db.get_entry(conn, user.user_id, entry_id)
     text = format_logged(entry, user.currency, today)
     if category is None:
@@ -394,25 +399,35 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     # Never log message text: exc_info carries the traceback only.
     log.error("handler error for user %s: %s", user_id, type(context.error).__name__, exc_info=context.error)
     if isinstance(update, Update) and update.effective_message:
-        await update.effective_message.reply_text(GENERIC_ERROR)
+        await update.effective_message.reply_text(error_text(update, context.user_data or {}))
+
+
+def error_text(update: Update, user_data: dict) -> str:
+    """Never claim an entry was lost when it was saved: the reply may fail after the commit."""
+    text = update.message.text if update.message and update.message.text else ""
+    if not text or text.startswith("/"):
+        return COMMAND_ERROR
+    return SAVED_UNCONFIRMED if user_data.get("saved_update") == update.update_id else GENERIC_ERROR
+
+
+async def on_edited(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.edited_message.reply_text(EDIT_NOT_TRACKED)
+
+
+COMMANDS = {
+    "start": cmd_start, "currency": cmd_currency, "undo": cmd_undo, "recent": cmd_recent, "cancel": cmd_cancel,
+    "report": cmd_report, "upcoming": cmd_upcoming, "recurring": cmd_recurring, "notify": cmd_notify,
+    "export": cmd_export, "deleteaccount": cmd_deleteaccount, "help": cmd_help,
+}
 
 
 def register(app: Application, conn: sqlite3.Connection) -> None:
     app.bot_data["conn"] = conn
     app.bot_data["limiter"] = RateLimiter()
     app.add_handler(TypeHandler(Update, gate), group=-1)
-    app.add_handler(CommandHandler("start", cmd_start))
-    app.add_handler(CommandHandler("currency", cmd_currency))
-    app.add_handler(CommandHandler("undo", cmd_undo))
-    app.add_handler(CommandHandler("recent", cmd_recent))
-    app.add_handler(CommandHandler("cancel", cmd_cancel))
-    app.add_handler(CommandHandler("report", cmd_report))
-    app.add_handler(CommandHandler("upcoming", cmd_upcoming))
-    app.add_handler(CommandHandler("recurring", cmd_recurring))
-    app.add_handler(CommandHandler("notify", cmd_notify))
-    app.add_handler(CommandHandler("export", cmd_export))
-    app.add_handler(CommandHandler("deleteaccount", cmd_deleteaccount))
-    app.add_handler(CommandHandler("help", cmd_help))
+    # New messages only: an edited message has update.message = None and must not re-run a command.
+    for name, callback in COMMANDS.items():
+        app.add_handler(CommandHandler(name, callback, filters=filters.UpdateType.MESSAGE))
     app.add_handler(CallbackQueryHandler(on_stop_recurring, pattern=r"^stoprec:\d+$"))
     app.add_handler(CallbackQueryHandler(on_export, pattern=r"^export:(yes|no)$"))
     app.add_handler(CallbackQueryHandler(on_deleteaccount, pattern=r"^delacct:(yes|no)$"))
@@ -422,5 +437,6 @@ def register(app: Application, conn: sqlite3.Connection) -> None:
     app.add_handler(CallbackQueryHandler(on_category, pattern=r"^cat:\d+:\d+$"))
     app.add_handler(CallbackQueryHandler(on_edit, pattern=r"^edit:\d+$"))
     app.add_handler(CallbackQueryHandler(on_currency_button, pattern=r"^cur:[A-Z]{3}$"))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
+    app.add_handler(MessageHandler(filters.UpdateType.MESSAGE & filters.TEXT & ~filters.COMMAND, on_text))
+    app.add_handler(MessageHandler(filters.UpdateType.EDITED_MESSAGE & filters.TEXT, on_edited))
     app.add_error_handler(on_error)

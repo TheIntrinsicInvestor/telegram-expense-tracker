@@ -40,6 +40,9 @@ EXPORT_WARNING = ("Your CSV will be sent in this chat. Telegram stores normal ch
 DELETE_WARNING = ("This permanently deletes all your entries, recurring payments and settings. "
                   "It cannot be undone. Delete everything?")
 GENERIC_ERROR = "Something went wrong, that entry was not saved."
+SAVED_UNCONFIRMED = "Your entry was saved, but I couldn't confirm it. Check /recent before sending it again."
+COMMAND_ERROR = "Something went wrong, try again."
+EDIT_NOT_TRACKED = "Edits to sent messages aren't tracked. Use /recent to change an entry."
 STALE = "That entry no longer exists."
 RATE_LIMITED = "You're sending messages too fast. Wait a minute and try again."
 NO_HISTORY = "Comparisons start once you have a full month of data."
