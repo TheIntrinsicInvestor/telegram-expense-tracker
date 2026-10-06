@@ -120,7 +120,11 @@ def _by_category(entries: list[Entry]) -> dict[str, float]:
 # --- baseline ("usual level") ---
 
 def _baseline_ranges(kind: str, start: date, entries: list[Entry]) -> list[tuple[date, date]]:
-    """Earlier periods that contain data, used to define the user's usual level."""
+    """Earlier full periods with data, used to define the user's usual level.
+
+    A period only counts if the user was already tracking when it began, so a
+    partial first month never becomes "usual".
+    """
     if kind in ("month", "lastmonth"):
         candidates = [_month_range(*_shift_month(start.year, start.month, -k)) for k in range(1, BASELINE_MONTHS + 1)]
     elif kind == "week":
@@ -128,15 +132,27 @@ def _baseline_ranges(kind: str, start: date, entries: list[Entry]) -> list[tuple
                       for k in range(1, BASELINE_WEEKS + 1)]
     else:
         return []
-    return [(s, e) for s, e in candidates if _between(entries, s, e)]
+    first = min((e.date for e in entries), default=None)
+    return [(s, e) for s, e in candidates if first is not None and first <= s and _between(entries, s, e)]
 
 
-def _usual_by_category(entries: list[Entry], ranges: list[tuple[date, date]]) -> dict[str, float]:
+def _usual_to_date(entries: list[Entry], ranges: list[tuple[date, date]], days: int) -> dict[str, float]:
+    """Average spend per category over the first `days` days of each baseline period.
+
+    Comparing like-for-like days (not a pro-rated monthly total) keeps rent paid on
+    the 1st from looking "above usual" for most of the month.
+    """
     sums: dict[str, float] = defaultdict(float)
     for s, e in ranges:
-        for cat, amount in _by_category(_between(entries, s, e)).items():
+        cutoff = min(e, s + timedelta(days=days - 1))
+        for cat, amount in _by_category(_between(entries, s, cutoff)).items():
             sums[cat] += amount
     return {cat: amount / len(ranges) for cat, amount in sums.items()}
+
+
+def _usual_rest_of_period(entries: list[Entry], ranges: list[tuple[date, date]], days: int) -> float:
+    """Average spend after day `days` in each baseline period: what usually still comes."""
+    return sum(_total(_between(entries, s + timedelta(days=days), e)) for s, e in ranges) / len(ranges)
 
 
 def _compare(kind: str, start: date, today: date, entries: list[Entry]) -> tuple[float, str]:
@@ -152,17 +168,18 @@ def _compare(kind: str, start: date, today: date, entries: list[Entry]) -> tuple
 
 # --- tips ---
 
-def _above_usual_tips(kind, categories, factor, currency) -> list[Tip]:
+def _above_usual_tips(kind, categories, currency) -> list[Tip]:
     tips = []
-    period_word = "week" if kind == "week" else "month"
+    period_words = {"week": "this week", "lastmonth": "a month"}.get(kind, "this month")
     for c in categories:
         if c.usual is None:
             continue
         excess = c.amount - c.usual
         if round2(excess) > ABOVE_USUAL_MIN and c.amount > c.usual * ABOVE_USUAL_RATIO:
-            value = round2(excess / factor if kind in ("month", "week") else excess)
+            # The saving is the excess already spent; extrapolating it misfires on one-off payments.
+            value = round2(excess)
             text = (f"{c.category} is {fmt_money(excess, currency)} above usual. "
-                    f"Getting back to usual saves about {fmt_money(value, currency)} this {period_word}.")
+                    f"Getting back to usual saves about {fmt_money(value, currency)} {period_words}.")
             tips.append(Tip("above_usual", value, text))
     return tips
 
@@ -239,20 +256,14 @@ def build_report(kind: str, entries: list[Entry], recurring: list[Recurring], to
     else:
         has_history = bool(ranges)
 
-    if kind == "month":
-        factor = days_elapsed / _days_in_month(start.year, start.month)
-    elif kind == "week":
-        factor = days_elapsed / 7
-    else:
-        factor = 1.0
-    usual = _usual_by_category(entries, ranges) if has_history and kind != "year" else None
+    usual = _usual_to_date(entries, ranges, days_elapsed) if has_history and kind != "year" else None
 
     sums = _by_category(spent)
     ordered = sorted(sums, key=lambda c: (-sums[c], CATEGORIES.index(c) if c in CATEGORIES else len(CATEGORIES)))
     categories = []
     for cat in ordered:
         amount = round2(sums[cat])
-        cat_usual = usual.get(cat, 0.0) * factor if usual is not None else None
+        cat_usual = round2(usual.get(cat, 0.0)) if usual is not None else None
         categories.append(CategoryLine(
             cat, amount, amount / total if total else 0.0, cat_usual,
             amount - cat_usual if cat_usual is not None else None,
@@ -263,7 +274,7 @@ def build_report(kind: str, entries: list[Entry], recurring: list[Recurring], to
         compare_total, compare_label = _compare(kind, start, today, entries)
 
     recurring_annual = round2(sum(annual_cost(r.amount, r.frequency) for r in recurring))
-    tips = (_above_usual_tips(kind, categories, factor, currency)
+    tips = (_above_usual_tips(kind, categories, currency)
             + _repeated_tips(spent, days_elapsed, currency)
             + _recurring_tip(recurring, recurring_annual, currency))
     tips = sorted(tips, key=lambda t: -t.value)[:MAX_TIPS]
@@ -271,7 +282,11 @@ def build_report(kind: str, entries: list[Entry], recurring: list[Recurring], to
     projected = None
     if kind == "month":
         planned_rest = _total([e for e in entries if today < e.date <= end])
-        projected = round2(total / days_elapsed * _days_in_month(start.year, start.month) + planned_rest)
+        if has_history:
+            # Spent so far plus what usually still comes this month (not a straight-line run rate).
+            projected = round2(total + _usual_rest_of_period(entries, ranges, days_elapsed) + planned_rest)
+        else:
+            projected = round2(total / days_elapsed * _days_in_month(start.year, start.month) + planned_rest)
 
     spend_days = {e.date for e in spent}
     days = [start + timedelta(days=i) for i in range(days_elapsed)]

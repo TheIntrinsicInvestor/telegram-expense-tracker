@@ -46,9 +46,9 @@ def test_report_month_lines(month_report):
     for line in [
         "Spent: £150.00",
         "vs same point last month: -£150.00 (-50%)",
-        "Projected month-end: £460.00",
+        "Projected month-end: £300.00",
         "No-spend days: 4 of 15",
-        "Eating Out £100.00 (67%) +£51.61 vs usual",
+        "Eating Out £100.00 (67%) £0.00 vs usual",
         "coffee ×10 (£30.00). Half as often saves about £365.00 a year.",
         "Weekdays £12.82/day · Weekends £2.25/day",
         "Coming up (30 days): £190.00",

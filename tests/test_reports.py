@@ -14,22 +14,60 @@ def kinds(r):
 
 def test_month_headline(month_report):
     r = month_report
-    assert (r.total, r.compare_total, r.projected, r.no_spend_days, r.days_elapsed) == (150.0, 300.0, 460.0, 4, 15)
+    assert (r.total, r.compare_total, r.projected, r.no_spend_days, r.days_elapsed) == (150.0, 300.0, 300.0, 4, 15)
     assert r.compare_label == "same point last month"
 
 
 def test_month_categories(month_report):
     eo = next(c for c in month_report.categories if c.category == "Eating Out")
-    assert (eo.amount, round2(eo.usual), round2(eo.change), round2(eo.share)) == (100.0, 48.39, 51.61, 0.67)
+    assert (eo.amount, round2(eo.usual), round2(eo.change), round2(eo.share)) == (100.0, 100.0, 0.0, 0.67)
     assert [c.category for c in month_report.categories] == ["Eating Out", "Groceries"]
 
 
 def test_month_tips(month_report):
     r = month_report
-    assert [(t.kind, t.value) for t in r.tips] == [("repeated", 365.0), ("recurring", 144.0), ("above_usual", 106.67)]
+    assert [(t.kind, t.value) for t in r.tips] == [("repeated", 365.0), ("recurring", 144.0)]
     assert r.tips[0].text == "coffee ×10 (£30.00). Half as often saves about £365.00 a year."
     assert r.tips[1].text == "Recurring payments: £12.00/month, £144.00/year (netflix)."
-    assert r.tips[2].text == "Eating Out is £51.61 above usual. Getting back to usual saves about £106.67 this month."
+
+
+def _rent_history():
+    specs = []
+    for m in (7, 8, 9):
+        specs.append((950.0, "Housing", "rent", date(2026, m, 1)))
+        specs.append((50.0, "Groceries", "tesco", date(2026, m, 15)))
+    specs.append((950.0, "Housing", "rent", date(2026, 10, 1)))
+    return specs
+
+
+def test_rent_on_the_first_is_not_above_usual():
+    r = build_report("month", make_entries(_rent_history()), [], date(2026, 10, 6), "GBP")
+    housing = next(c for c in r.categories if c.category == "Housing")
+    assert (housing.usual, housing.change) == (950.0, 0.0)
+    assert "above_usual" not in kinds(r)
+    assert r.projected == 1000.0  # 950 spent + 50 usually still to come
+
+
+def test_one_off_spend_tip_is_the_excess_not_extrapolated():
+    specs = _rent_history() + [(300.0, "Travel", "flight", date(2026, 10, 2))]
+    r = build_report("month", make_entries(specs), [], date(2026, 10, 6), "GBP")
+    tip = next(t for t in r.tips if t.kind == "above_usual")
+    assert tip.value == 300.0
+    assert tip.text == "Travel is £300.00 above usual. Getting back to usual saves about £300.00 this month."
+
+
+def test_partial_first_month_is_not_a_baseline():
+    specs = [(8.0, "Eating Out", "lunch", date(2026, 9, 30))]
+    specs += [(12.0, "Eating Out", "lunch", date(2026, 10, d)) for d in range(1, 16)]
+    r = build_report("month", make_entries(specs), [], TODAY, "GBP")
+    assert not r.has_history and r.compare_total is None and "above_usual" not in kinds(r)
+
+
+def test_lastmonth_tip_wording():
+    specs = [(40.0, "Shopping", "clothes", date(2026, m, 5)) for m in (6, 7, 8)]
+    specs.append((80.0, "Shopping", "clothes", date(2026, 9, 5)))
+    r = build_report("lastmonth", make_entries(specs), [], TODAY, "GBP")
+    assert r.tips[0].text == "Shopping is £40.00 above usual. Getting back to usual saves about £40.00 a month."
 
 
 def test_month_patterns(month_report):
@@ -89,7 +127,7 @@ def test_new_user_mid_month_tracked_days():
 
 
 def test_week():
-    entries = make_entries([(35.0, "Other", "x", date(2026, 10, 7)), (20.0, "Other", "y", date(2026, 10, 12))])
+    entries = make_entries([(35.0, "Other", "x", date(2026, 10, 5)), (20.0, "Other", "y", date(2026, 10, 12))])
     r = build_report("week", entries, [], date(2026, 10, 14), "GBP")
     assert (r.start, r.end, r.total, r.compare_total, r.compare_label) == (
         date(2026, 10, 12), date(2026, 10, 18), 20.0, 35.0, "last week")
