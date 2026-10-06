@@ -161,7 +161,10 @@ def _compare(kind: str, start: date, today: date, entries: list[Entry]) -> tuple
         end_day = min(today.day, _days_in_month(year, month))
         return _total(_between(entries, date(year, month, 1), date(year, month, end_day))), "same point last month"
     if kind == "week":
-        return _total(_between(entries, start - timedelta(days=7), start - timedelta(days=1))), "last week"
+        # Same weekdays last week, so a Wednesday isn't compared with a whole week.
+        last_start = start - timedelta(days=7)
+        same_day = last_start + timedelta(days=today.weekday())
+        return _total(_between(entries, last_start, same_day)), "same point last week"
     s, e = _month_range(*_shift_month(start.year, start.month, -1))
     return _total(_between(entries, s, e)), "the month before"
 

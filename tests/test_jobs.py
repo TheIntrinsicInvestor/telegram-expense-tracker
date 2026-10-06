@@ -66,7 +66,8 @@ def test_monthly_once(conn):
     assert of_kind(collect_hourly(conn, utc(2026, 10, 1, 7, 0)), "monthly") == []  # 08:00 London
     monthly = of_kind(collect_hourly(conn, utc(2026, 10, 1, 8, 0)), "monthly")
     assert [o.user_id for o in monthly] == [1]  # user 2 logged nothing in September
-    assert monthly[0].photo.startswith(b"\x89PNG") and monthly[0].text.startswith("September 2026")
+    assert monthly[0].report.kind == "lastmonth" and monthly[0].report.start == date(2026, 9, 1)
+    assert monthly[0].html is True
     mark_sent(conn, monthly[0])
     assert of_kind(collect_hourly(conn, utc(2026, 10, 1, 9, 0)), "monthly") == []
 

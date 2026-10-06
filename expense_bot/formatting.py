@@ -2,6 +2,7 @@
 
 import csv
 import io
+from html import escape
 from datetime import date, timedelta
 
 from expense_bot.models import Entry, Recurring
@@ -45,9 +46,7 @@ COMMAND_ERROR = "Something went wrong, try again."
 EDIT_NOT_TRACKED = "Edits to sent messages aren't tracked. Use /recent to change an entry."
 STALE = "That entry no longer exists."
 RATE_LIMITED = "You're sending messages too fast. Wait a minute and try again."
-NO_HISTORY = "Comparisons start once you have a full month of data."
 NOTHING_STANDS_OUT = "Nothing stands out this period."
-EMPTY_PERIOD = "Nothing logged yet this period."
 
 
 def _short(d: date) -> str:
@@ -98,88 +97,19 @@ def format_recurring_list(recs: list[Recurring], currency: str) -> str:
 
 
 # --- reports ---
-
-def _title(r: ReportData) -> str:
-    if r.kind == "month":
-        return f"{r.start:%B %Y} so far"
-    if r.kind == "lastmonth":
-        return f"{r.start:%B %Y}"
-    if r.kind == "week":
-        return f"This week ({_short(r.start)} to {_short(r.end)})"
-    return f"{r.start.year} so far"
-
-
-def _compare_line(r: ReportData) -> str | None:
-    if r.compare_total is None:
-        return None
-    change = r.total - r.compare_total
-    line = f"vs {r.compare_label}: {fmt_signed(change, r.currency)}"
-    if r.compare_total > 0:
-        line += f" ({change / r.compare_total * 100:+.0f}%)".replace("+-", "-")
-    return line
-
-
-def _category_line(c, currency: str) -> str:
-    line = f"{c.category} {fmt_money(c.amount, currency)} ({c.share * 100:.0f}%)"
-    if c.change is not None:
-        line += f" {fmt_signed(c.change, currency)} vs usual"
-    return line
-
-
-def _coming_up(r: ReportData) -> list[str]:
-    if not r.upcoming:
-        return ["Coming up (30 days): nothing planned"]
-    lines = [f"Coming up (30 days): {fmt_money(r.upcoming_total, r.currency)}"]
-    lines += [f"{_short(e.date)}  {fmt_money(e.amount, r.currency)} {e.note}".rstrip() for e in r.upcoming]
-    return lines
-
-
-def _largest_line(r: ReportData) -> str:
-    items = [f"{fmt_money(e.amount, r.currency)} {e.note} ({_short(e.date)})".replace("  ", " ") for e in r.largest]
-    return "Biggest: " + ", ".join(items)
-
-
-def _format_year(r: ReportData) -> str:
-    lines = [_title(r), "", f"Spent: {fmt_money(r.total, r.currency)}",
-             f"No-spend days: {r.no_spend_days} of {r.tracked_days}"]
-    if r.categories:
-        lines += ["", "Top categories"] + [_category_line(c, r.currency) for c in r.categories[:5]]
-    lines.append("")
-    if r.worst_month:
-        lines.append(f"Most expensive month: {r.worst_month[0]} {fmt_money(r.worst_month[1], r.currency)}")
-    if r.best_month:
-        lines.append(f"Cheapest month: {r.best_month[0]} {fmt_money(r.best_month[1], r.currency)}")
-    if r.largest:
-        e = r.largest[0]
-        lines.append(f"Largest expense: {fmt_money(e.amount, r.currency)} {e.note} ({_short(e.date)})".replace("  ", " "))
-    lines.append(f"Recurring payments: {fmt_money(r.recurring_annual, r.currency)}/year")
-    return "\n".join(lines)
-
+# The figures live on the report card image; the text carries only what you act on.
+# Telegram HTML: everything user-supplied is escaped.
 
 def format_report(r: ReportData) -> str:
-    if r.kind == "year":
-        return _format_year(r)
-    lines = [_title(r), ""]
-    if not r.categories:
-        lines.append(EMPTY_PERIOD)
-        return "\n".join(lines + [""] + _coming_up(r))
-
-    lines.append(f"Spent: {fmt_money(r.total, r.currency)}")
-    compare = _compare_line(r)
-    if compare:
-        lines.append(compare)
-    if r.projected is not None:
-        lines.append(f"Projected month-end: {fmt_money(r.projected, r.currency)}")
-    lines.append(f"No-spend days: {r.no_spend_days} of {r.tracked_days}")
-    if not r.has_history:
-        lines.append(NO_HISTORY)
-
-    lines += ["", "By category"] + [_category_line(c, r.currency) for c in r.categories]
-    lines += ["", "Where to save"] + ([t.text for t in r.tips] or [NOTHING_STANDS_OUT])
-    lines += ["", "Patterns",
-              f"Weekdays {fmt_money(r.weekday_avg, r.currency)}/day · Weekends {fmt_money(r.weekend_avg, r.currency)}/day",
-              _largest_line(r)]
-    lines += [""] + _coming_up(r)
+    """Short companion text for the report card. Empty string when there is nothing to add."""
+    if not r.tips and not r.upcoming:
+        return ""
+    lines = ["<b>Where to save</b>"]
+    lines += [f"• {escape(t.text)}" for t in r.tips] or [NOTHING_STANDS_OUT]
+    if r.upcoming:
+        lines += ["", f"<b>Coming up</b> {fmt_money(r.upcoming_total, r.currency)} in the next 30 days"]
+        lines += [f"{_short(e.date)}  {fmt_money(e.amount, r.currency)}  {escape(e.note or e.category)}"
+                  for e in r.upcoming]
     return "\n".join(lines)
 
 

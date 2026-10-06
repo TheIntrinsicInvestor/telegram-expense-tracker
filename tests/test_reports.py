@@ -130,8 +130,15 @@ def test_week():
     entries = make_entries([(35.0, "Other", "x", date(2026, 10, 5)), (20.0, "Other", "y", date(2026, 10, 12))])
     r = build_report("week", entries, [], date(2026, 10, 14), "GBP")
     assert (r.start, r.end, r.total, r.compare_total, r.compare_label) == (
-        date(2026, 10, 12), date(2026, 10, 18), 20.0, 35.0, "last week")
+        date(2026, 10, 12), date(2026, 10, 18), 20.0, 35.0, "same point last week")
     assert r.days_elapsed == 3
+
+
+def test_week_compares_same_days_of_last_week():
+    entries = make_entries([(10.0, "Other", "x", date(2026, 10, 5)), (50.0, "Other", "y", date(2026, 10, 9)),
+                            (20.0, "Other", "z", date(2026, 10, 12))])
+    r = build_report("week", entries, [], date(2026, 10, 14), "GBP")
+    assert r.compare_total == 10.0  # Mon-Wed last week only; Friday's 50 isn't comparable yet
 
 
 def test_year(year_report):

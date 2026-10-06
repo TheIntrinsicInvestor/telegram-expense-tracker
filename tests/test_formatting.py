@@ -4,7 +4,6 @@ from expense_bot.formatting import (
     DELETE_WARNING,
     EXPORT_WARNING,
     HELP_TEXT,
-    NO_HISTORY,
     PRIVACY_TEXT,
     date_label,
     export_csv,
@@ -41,32 +40,39 @@ def test_empty_note():
     assert format_logged(entry(5, "Other", "", TODAY), "GBP", TODAY) == "Logged £5.00 · Other · today"
 
 
-def test_report_month_lines(month_report):
-    t = format_report(month_report)
-    for line in [
-        "Spent: £150.00",
-        "vs same point last month: -£150.00 (-50%)",
-        "Projected month-end: £300.00",
-        "No-spend days: 4 of 15",
-        "Eating Out £100.00 (67%) £0.00 vs usual",
-        "coffee ×10 (£30.00). Half as often saves about £365.00 a year.",
-        "Weekdays £12.82/day · Weekends £2.25/day",
-        "Coming up (30 days): £190.00",
-    ]:
-        assert line in t, line
+def test_report_text_is_tips_and_coming_up(month_report):
+    assert format_report(month_report) == (
+        "<b>Where to save</b>\n"
+        "• coffee ×10 (£30.00). Half as often saves about £365.00 a year.\n"
+        "• Recurring payments: £12.00/month, £144.00/year (netflix).\n"
+        "\n"
+        "<b>Coming up</b> £190.00 in the next 30 days\n"
+        "31 Oct  £150.00  flights\n"
+        "1 Nov  £40.00  concert"
+    )
 
 
-def test_report_no_history_note(no_history_report):
-    assert NO_HISTORY in format_report(no_history_report)
+def test_report_text_escapes_html():
+    from dataclasses import replace
+
+    from expense_bot.reports import Tip
+    r = replace(_minimal_report(), tips=[Tip("repeated", 1.0, "<b>x</b> & y")])
+    assert "&lt;b&gt;x&lt;/b&gt; &amp; y" in format_report(r)
 
 
-def test_report_year(year_report):
-    t = format_report(year_report)
-    assert "Spent: £1,050.00" in t and "Recurring payments: £144.00/year" in t
+def _minimal_report():
+    from expense_bot.reports import build_report
+    return build_report("month", [], [], TODAY, "GBP")
 
 
-def test_report_empty(empty_report):
-    assert "Nothing logged yet this period." in format_report(empty_report)
+def test_report_text_nothing_to_say(empty_report):
+    assert format_report(empty_report) == ""
+
+
+def test_report_text_no_tips_but_upcoming():
+    from expense_bot.reports import build_report
+    r = build_report("month", [entry(150, "Travel", "flights", date(2026, 10, 20))], [], TODAY, "GBP")
+    assert format_report(r).startswith("<b>Where to save</b>\nNothing stands out this period.\n\n<b>Coming up</b>")
 
 
 def test_weekly_summary(week_report):

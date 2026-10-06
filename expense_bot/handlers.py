@@ -7,6 +7,7 @@ import time
 from datetime import date
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.constants import ParseMode
 from telegram.ext import (
     Application,
     ApplicationHandlerStop,
@@ -20,7 +21,7 @@ from telegram.ext import (
 
 from expense_bot import db
 from expense_bot.categories import CATEGORIES, first_word, resolve
-from expense_bot.charts import render_report_chart
+from expense_bot.card import build_card_html
 from expense_bot.clock import local_today, utc_now
 from expense_bot.formatting import (
     COMMAND_ERROR,
@@ -45,6 +46,7 @@ from expense_bot.models import User
 from expense_bot.money import fmt_money
 from expense_bot.parser import ParseError, parse_entry, parse_recurring
 from expense_bot.ratelimit import RateLimiter
+from expense_bot.render import CardRenderer
 from expense_bot.reports import build_report
 
 log = logging.getLogger(__name__)
@@ -291,8 +293,11 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
     report = build_report(kind, db.all_entries(conn, user.user_id), db.active_recurring(conn, user.user_id),
                           today, user.currency)
-    await update.message.reply_photo(photo=render_report_chart(report))
-    await update.message.reply_text(format_report(report))
+    renderer: CardRenderer = context.bot_data["renderer"]
+    await update.message.reply_photo(photo=await renderer.render(build_card_html(report)))
+    text = format_report(report)
+    if text:
+        await update.message.reply_text(text, parse_mode=ParseMode.HTML)
 
 
 async def cmd_upcoming(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -441,6 +446,7 @@ COMMANDS = {
 def register(app: Application, conn: sqlite3.Connection) -> None:
     app.bot_data["conn"] = conn
     app.bot_data["limiter"] = RateLimiter()
+    app.bot_data["renderer"] = CardRenderer()
     app.add_handler(TypeHandler(Update, gate), group=-1)
     # New messages only: an edited message has update.message = None and must not re-run a command.
     for name, callback in COMMANDS.items():

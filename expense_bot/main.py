@@ -5,10 +5,12 @@ from datetime import time
 from zoneinfo import ZoneInfo
 
 from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.constants import ParseMode
 from telegram.error import Forbidden
 from telegram.ext import Application, ContextTypes
 
 from expense_bot import db, jobs
+from expense_bot.card import build_card_html
 from expense_bot.clock import local_today, utc_now
 from expense_bot.config import load_config
 from expense_bot.handlers import BOT_COMMANDS, register
@@ -23,12 +25,15 @@ async def hourly(context: ContextTypes.DEFAULT_TYPE) -> None:
     conn = context.bot_data["conn"]
     for out in jobs.collect_hourly(conn, utc_now()):
         try:
-            if out.photo:
-                await context.bot.send_photo(chat_id=out.user_id, photo=out.photo)
+            if out.report is not None:
+                card = await context.bot_data["renderer"].render(build_card_html(out.report))
+                await context.bot.send_photo(chat_id=out.user_id, photo=card)
             markup = None
             if out.undo_entry_id:
                 markup = InlineKeyboardMarkup([[InlineKeyboardButton("Undo", callback_data=f"undo:{out.undo_entry_id}")]])
-            await context.bot.send_message(chat_id=out.user_id, text=out.text, reply_markup=markup)
+            if out.text:
+                await context.bot.send_message(chat_id=out.user_id, text=out.text, reply_markup=markup,
+                                               parse_mode=ParseMode.HTML if out.html else None)
         except Forbidden:
             # The user blocked the bot: retrying every hour would never succeed.
             log.info("user %s has blocked the bot; marking %s as sent", out.user_id, out.kind)
@@ -48,6 +53,10 @@ async def post_init(app: Application) -> None:
     await app.bot.set_my_commands([BotCommand(name, description) for name, description in BOT_COMMANDS])
 
 
+async def post_shutdown(app: Application) -> None:
+    await app.bot_data["renderer"].close()
+
+
 def main() -> None:
     logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s: %(message)s", level=logging.INFO)
     # httpx logs request URLs at INFO, and those URLs contain the bot token.
@@ -55,7 +64,7 @@ def main() -> None:
     config = load_config()
     config.db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = db.connect(config.db_path)
-    app = Application.builder().token(config.token).post_init(post_init).build()
+    app = Application.builder().token(config.token).post_init(post_init).post_shutdown(post_shutdown).build()
     app.bot_data["config"] = config
     register(app, conn)
     app.job_queue.run_repeating(hourly, interval=HOURLY_SECONDS, first=10)

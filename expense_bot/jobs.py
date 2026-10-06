@@ -9,12 +9,11 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from expense_bot import db
-from expense_bot.charts import render_report_chart
 from expense_bot.clock import local_now
 from expense_bot.formatting import format_entry_line, format_report, format_weekly_summary
 from expense_bot.models import User
 from expense_bot.money import fmt_money
-from expense_bot.reports import build_report
+from expense_bot.reports import ReportData, build_report
 
 REMINDER_HOUR = 9
 MONTHLY_HOUR = 9
@@ -28,8 +27,9 @@ class Outgoing:
     text: str
     kind: str  # "recurring" | "reminder" | "weekly" | "monthly"
     ref: int | str | None = None
-    photo: bytes | None = None
+    report: ReportData | None = None  # rendered to a card image by the sender
     undo_entry_id: int | None = None
+    html: bool = False  # text uses Telegram HTML formatting
 
 
 def _previous_month(today: date) -> tuple[str, date, date]:
@@ -82,8 +82,7 @@ def collect_hourly(conn: sqlite3.Connection, now_utc: datetime) -> list[Outgoing
         if (now.hour >= MONTHLY_HOUR and user.last_monthly_sent != month_key
                 and any(month_start <= e.date <= month_end for e in entries)):
             report = build_report("lastmonth", entries, recurring, today, user.currency)
-            out.append(Outgoing(user.user_id, format_report(report), "monthly", month_key,
-                                photo=render_report_chart(report)))
+            out.append(Outgoing(user.user_id, format_report(report), "monthly", month_key, report=report, html=True))
     return out
 
 
