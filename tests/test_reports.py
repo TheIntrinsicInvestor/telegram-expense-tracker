@@ -77,6 +77,17 @@ def test_empty_first_day(empty_report):
     assert (r.total, r.projected, r.no_spend_days, r.tips) == (0.0, 0.0, 1, [])
 
 
+def test_no_spend_days_start_at_first_entry(year_report):
+    # First entry is 1 Jul; 1 Jul..15 Oct is 107 days, spend on 3 baseline days + 11 October days.
+    assert (year_report.tracked_days, year_report.no_spend_days) == (107, 93)
+
+
+def test_new_user_mid_month_tracked_days():
+    entries = make_entries([(5.0, "Other", "x", date(2026, 10, 10))])
+    r = build_report("month", entries, [], TODAY, "GBP")
+    assert (r.tracked_days, r.no_spend_days, r.days_elapsed) == (6, 5, 15)
+
+
 def test_week():
     entries = make_entries([(35.0, "Other", "x", date(2026, 10, 7)), (20.0, "Other", "y", date(2026, 10, 12))])
     r = build_report("week", entries, [], date(2026, 10, 14), "GBP")

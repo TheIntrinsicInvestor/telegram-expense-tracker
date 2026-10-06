@@ -56,6 +56,7 @@ class ReportData:
     compare_label: str
     projected: float | None
     no_spend_days: int
+    tracked_days: int
     days_elapsed: int
     categories: list[CategoryLine]
     tips: list[Tip]
@@ -274,6 +275,9 @@ def build_report(kind: str, entries: list[Entry], recurring: list[Recurring], to
 
     spend_days = {e.date for e in spent}
     days = [start + timedelta(days=i) for i in range(days_elapsed)]
+    # No-spend days only count from the user's first entry, so a new user doesn't look idle before joining.
+    first = min((e.date for e in entries), default=start)
+    tracked = [d for d in days if d >= first] if first <= elapsed_end else days
     weekend_days = [d for d in days if d.weekday() >= 5]
     weekday_days = [d for d in days if d.weekday() < 5]
     weekend_spend = sum(e.amount for e in spent if e.date.weekday() >= 5)
@@ -295,7 +299,8 @@ def build_report(kind: str, entries: list[Entry], recurring: list[Recurring], to
     return ReportData(
         kind=kind, start=start, end=end, today=today, currency=currency, total=total,
         compare_total=compare_total, compare_label=compare_label, projected=projected,
-        no_spend_days=sum(1 for d in days if d not in spend_days), days_elapsed=days_elapsed,
+        no_spend_days=sum(1 for d in tracked if d not in spend_days), tracked_days=len(tracked),
+        days_elapsed=days_elapsed,
         categories=categories, tips=tips,
         weekday_avg=round2(weekday_spend / len(weekday_days)) if weekday_days else 0.0,
         weekend_avg=round2(weekend_spend / len(weekend_days)) if weekend_days else 0.0,
