@@ -66,3 +66,7 @@ def test_renders_png(month_report):
 
     png = asyncio.run(run())
     assert png.startswith(b"\x89PNG") and len(png) > 20_000
+
+
+def test_patterns_say_what_they_leave_out(month_report):
+    assert "Leaves out housing, bills and subscriptions." in build_card_html(month_report)

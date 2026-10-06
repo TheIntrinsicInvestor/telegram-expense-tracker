@@ -66,7 +66,8 @@ h2{{display:flex;justify-content:space-between;align-items:baseline;font-size:14
 .share,.chg{{font-size:13px;color:var(--slate);text-align:right}}
 .chg.over{{color:var(--over)}}
 .foot{{font-size:12.5px;color:var(--mist);margin-top:10px}}
-.patterns{{display:grid;grid-template-columns:1fr 1.4fr;gap:44px;padding-top:26px;border-top:1px solid var(--rule)}}
+.patterns{{display:grid;grid-template-columns:1fr 1.4fr;column-gap:44px;row-gap:12px;padding-top:26px;border-top:1px solid var(--rule)}}
+.patterns .wide{{grid-column:1 / -1;margin-top:0}}
 .avg{{font-size:14px;color:var(--slate);line-height:2}}
 .avg .num{{font-size:18px;color:var(--ink);margin-right:4px}}
 .largest{{list-style:none}}
@@ -314,7 +315,8 @@ def _patterns(r: ReportData) -> str:
         "<h2>Daily average</h2>"
         f'<div class="avg"><span class="num">{escape(_money(r.weekday_avg, cur))}</span> on weekdays</div>'
         f'<div class="avg"><span class="num">{escape(_money(r.weekend_avg, cur))}</span> at weekends</div>'
-        f'</div><div><h2>Largest expenses</h2><ol class="largest">{largest}</ol></div></section>'
+        f'</div><div><h2>Largest expenses</h2><ol class="largest">{largest}</ol></div>'
+        '<p class="foot wide">Leaves out housing, bills and subscriptions.</p></section>'
     )
 
 

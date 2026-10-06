@@ -158,3 +158,16 @@ def test_money_precision():
     r = build_report("month", db.all_entries(conn, 1), [], TODAY, "GBP")
     exact = sum(Decimal(s) for s in ["0.10", "0.20", "19.99", "4.35"]) * 2500
     assert r.total == 61600.0 == float(exact)
+
+
+def test_fixed_costs_left_out_of_patterns():
+    # Thu 1 Oct rent, Fri 2 Oct lunch, Sat 3 Oct drinks, Mon 5 Oct phone bill and Spotify
+    entries = make_entries([(850.0, "Housing", "Rent", date(2026, 10, 1)),
+                            (20.0, "Eating Out", "Lunch", date(2026, 10, 2)),
+                            (10.0, "Entertainment", "Drinks", date(2026, 10, 3)),
+                            (15.0, "Bills", "Phone", date(2026, 10, 5)),
+                            (11.99, "Subscriptions", "Spotify", date(2026, 10, 5))])
+    r = build_report("month", entries, [], date(2026, 10, 6), "GBP")
+    assert (r.weekday_avg, r.weekend_avg) == (5.0, 5.0)  # 20 over 4 weekdays, 10 over 2 weekend days
+    assert [e.note for e in r.largest] == ["Lunch", "Drinks"]
+    assert r.total == 906.99 and r.no_spend_days == 2  # fixed costs still count everywhere else

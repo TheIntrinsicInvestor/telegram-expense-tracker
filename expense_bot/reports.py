@@ -24,6 +24,9 @@ ABOVE_USUAL_RATIO = 1.2
 # "Repeated small item" thresholds.
 REPEAT_MIN_COUNT = 5
 REPEAT_MAX_AVG = 15.0
+# Fixed costs are left out of daily averages and the largest-expenses list: rent landing on a
+# Thursday would otherwise dominate both and say nothing about day-to-day habits.
+FIXED_CATEGORIES = frozenset({"Housing", "Bills", "Subscriptions"})
 
 _MONTH_ABBR = list(calendar.month_abbr)  # ["", "Jan", ...]
 
@@ -298,8 +301,9 @@ def build_report(kind: str, entries: list[Entry], recurring: list[Recurring], to
     tracked = [d for d in days if d >= first] if first <= elapsed_end else days
     weekend_days = [d for d in days if d.weekday() >= 5]
     weekday_days = [d for d in days if d.weekday() < 5]
-    weekend_spend = sum(e.amount for e in spent if e.date.weekday() >= 5)
-    weekday_spend = sum(e.amount for e in spent if e.date.weekday() < 5)
+    day_to_day = [e for e in spent if e.category not in FIXED_CATEGORIES]
+    weekend_spend = sum(e.amount for e in day_to_day if e.date.weekday() >= 5)
+    weekday_spend = sum(e.amount for e in day_to_day if e.date.weekday() < 5)
 
     upcoming = sorted((e for e in entries if today < e.date <= today + timedelta(days=UPCOMING_DAYS)),
                       key=lambda e: (e.date, e.id))
@@ -322,7 +326,7 @@ def build_report(kind: str, entries: list[Entry], recurring: list[Recurring], to
         categories=categories, tips=tips,
         weekday_avg=round2(weekday_spend / len(weekday_days)) if weekday_days else 0.0,
         weekend_avg=round2(weekend_spend / len(weekend_days)) if weekend_days else 0.0,
-        largest=sorted(spent, key=lambda e: (-e.amount, e.id))[:3],
+        largest=sorted(day_to_day, key=lambda e: (-e.amount, e.id))[:3],
         upcoming=upcoming, upcoming_total=_total(upcoming),
         pace=pace, baseline_pace=baseline_pace,
         monthly_totals=monthly_totals, best_month=best_month, worst_month=worst_month,
