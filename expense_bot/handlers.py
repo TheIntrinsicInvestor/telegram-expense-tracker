@@ -1,0 +1,274 @@
+"""Telegram glue: turns updates into calls on the logic modules. No business rules live here."""
+
+import logging
+import re
+import sqlite3
+import time
+from datetime import date
+
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.ext import (
+    Application,
+    ApplicationHandlerStop,
+    CallbackQueryHandler,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    TypeHandler,
+    filters,
+)
+
+from expense_bot import db
+from expense_bot.categories import CATEGORIES, first_word, resolve
+from expense_bot.clock import local_today, utc_now
+from expense_bot.formatting import (
+    GENERIC_ERROR,
+    PRIVACY_TEXT,
+    RATE_LIMITED,
+    STALE,
+    format_entry_line,
+    format_logged,
+)
+from expense_bot.models import User
+from expense_bot.parser import ParseError, parse_entry
+from expense_bot.ratelimit import RateLimiter
+
+log = logging.getLogger(__name__)
+
+CURRENCY_BUTTONS = ("GBP", "EUR", "USD", "SGD")
+_CURRENCY_RE = re.compile(r"^[A-Z]{3}$")
+
+
+# --- shared helpers ---
+
+def _conn(context: ContextTypes.DEFAULT_TYPE) -> sqlite3.Connection:
+    return context.bot_data["conn"]
+
+
+def _user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> tuple[sqlite3.Connection, User, date]:
+    conn = _conn(context)
+    user_id = update.effective_user.id
+    existing = db.get_user(conn, user_id)
+    today = local_today(existing.timezone if existing else "Europe/London", utc_now())
+    user = existing or db.ensure_user(conn, user_id, today)
+    return conn, user, today
+
+
+def logged_keyboard(entry_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[InlineKeyboardButton("Undo", callback_data=f"undo:{entry_id}"),
+                                  InlineKeyboardButton("Change category", callback_data=f"chcat:{entry_id}")]])
+
+
+def category_keyboard(entry_id: int) -> InlineKeyboardMarkup:
+    buttons = [InlineKeyboardButton(name, callback_data=f"cat:{entry_id}:{i}") for i, name in enumerate(CATEGORIES)]
+    return InlineKeyboardMarkup([buttons[i:i + 3] for i in range(0, len(buttons), 3)])
+
+
+def entry_keyboard(entry_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[InlineKeyboardButton("Edit", callback_data=f"edit:{entry_id}"),
+                                  InlineKeyboardButton("Delete", callback_data=f"del:{entry_id}")]])
+
+
+def _arg_id(data: str, position: int = 1) -> int:
+    return int(data.split(":")[position])
+
+
+# --- gate: rate limit every update ---
+
+async def gate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.effective_user:
+        raise ApplicationHandlerStop
+    limiter: RateLimiter = context.bot_data["limiter"]
+    verdict = limiter.check(update.effective_user.id, time.monotonic())
+    if verdict == "ok":
+        return
+    if verdict == "warn" and update.effective_message:
+        await update.effective_message.reply_text(RATE_LIMITED)
+    raise ApplicationHandlerStop
+
+
+# --- logging entries ---
+
+async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    conn, user, today = _user(update, context)
+    parsed = parse_entry(update.message.text, today)
+    if isinstance(parsed, ParseError):
+        await update.message.reply_text(parsed.message)
+        return
+
+    category = resolve(parsed.note, db.learned_words(conn, user.user_id))
+    editing = context.user_data.get("editing")
+    if editing is not None:
+        old = db.get_entry(conn, user.user_id, editing)
+        context.user_data.pop("editing", None)
+        if old is None:
+            await update.message.reply_text(STALE)
+            return
+        db.update_entry(conn, user.user_id, editing, parsed.amount, category or old.category, parsed.note,
+                        parsed.date, today)
+        entry = db.get_entry(conn, user.user_id, editing)
+        text = format_logged(entry, user.currency, today)
+        await update.message.reply_text("Updated " + text.split(" ", 1)[1], reply_markup=logged_keyboard(entry.id))
+        return
+
+    entry_id = db.add_entry(conn, user.user_id, parsed.amount, category or "Other", parsed.note, parsed.date, today)
+    entry = db.get_entry(conn, user.user_id, entry_id)
+    text = format_logged(entry, user.currency, today)
+    if category is None:
+        await update.message.reply_text(text + "\nPick a category:", reply_markup=category_keyboard(entry_id))
+    else:
+        await update.message.reply_text(text, reply_markup=logged_keyboard(entry_id))
+
+
+async def on_category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    conn, user, today = _user(update, context)
+    _, entry_id, index = query.data.split(":")
+    entry_id, category = int(entry_id), CATEGORIES[int(index)]
+    if not db.set_entry_category(conn, user.user_id, entry_id, category):
+        await query.edit_message_text(STALE)
+        return
+    entry = db.get_entry(conn, user.user_id, entry_id)
+    word = first_word(entry.note)
+    if word:
+        db.learn_word(conn, user.user_id, word, category)
+    await query.edit_message_text(format_logged(entry, user.currency, today), reply_markup=logged_keyboard(entry_id))
+
+
+async def on_change_category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    conn, user, today = _user(update, context)
+    entry = db.get_entry(conn, user.user_id, _arg_id(query.data))
+    if entry is None:
+        await query.edit_message_text(STALE)
+        return
+    await query.edit_message_text(format_logged(entry, user.currency, today) + "\nPick a category:",
+                                  reply_markup=category_keyboard(entry.id))
+
+
+# --- undo, delete, recent, edit ---
+
+async def on_delete(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handles both the [Undo] button on a logged entry and [Delete] buttons."""
+    query = update.callback_query
+    await query.answer()
+    conn, user, today = _user(update, context)
+    entry = db.get_entry(conn, user.user_id, _arg_id(query.data))
+    if entry is None or not db.delete_entry(conn, user.user_id, entry.id):
+        await query.edit_message_text(STALE)
+        return
+    await query.edit_message_text("Deleted " + format_entry_line(entry, user.currency, today))
+
+
+async def on_keep(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text("Kept.")
+
+
+async def cmd_undo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    conn, user, today = _user(update, context)
+    entry = db.latest_entry(conn, user.user_id)
+    if entry is None:
+        await update.message.reply_text("No entries yet.")
+        return
+    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("Delete", callback_data=f"del:{entry.id}"),
+                                      InlineKeyboardButton("Keep", callback_data="keep")]])
+    await update.message.reply_text("Delete your latest entry?\n" + format_entry_line(entry, user.currency, today),
+                                    reply_markup=keyboard)
+
+
+async def cmd_recent(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    conn, user, today = _user(update, context)
+    entries = db.recent_entries(conn, user.user_id)
+    if not entries:
+        await update.message.reply_text("No entries yet.")
+        return
+    for entry in entries:
+        await update.message.reply_text(format_entry_line(entry, user.currency, today),
+                                        reply_markup=entry_keyboard(entry.id))
+
+
+async def on_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    conn, user, _ = _user(update, context)
+    entry = db.get_entry(conn, user.user_id, _arg_id(query.data))
+    if entry is None:
+        await query.edit_message_text(STALE)
+        return
+    context.user_data["editing"] = entry.id
+    await query.message.reply_text("Send the corrected entry, e.g. 16 lunch 05/10. /cancel to stop.")
+
+
+async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    _user(update, context)
+    stopped = context.user_data.pop("editing", None) is not None
+    await update.message.reply_text("Edit cancelled." if stopped else "Nothing to cancel.")
+
+
+# --- settings ---
+
+async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    _, user, _ = _user(update, context)
+    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton(code, callback_data=f"cur:{code}")
+                                      for code in CURRENCY_BUTTONS]])
+    await update.message.reply_text(
+        "Track spending by typing it, e.g. 15 lunch. /help shows everything.\n\n"
+        f"{PRIVACY_TEXT}\n\n"
+        f"Your currency is {user.currency}. Pick one below to change it.\n"
+        "Other currency? Send /currency CODE, e.g. /currency CHF.",
+        reply_markup=keyboard,
+    )
+
+
+async def _set_currency(update: Update, context: ContextTypes.DEFAULT_TYPE, code: str) -> str:
+    conn, user, _ = _user(update, context)
+    db.set_currency(conn, user.user_id, code)
+    return f"Currency set to {code}."
+
+
+async def on_currency_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    code = query.data.split(":")[1]
+    await query.message.reply_text(await _set_currency(update, context, code))
+
+
+async def cmd_currency(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    code = (context.args[0] if context.args else "").upper()
+    if not _CURRENCY_RE.match(code):
+        await update.message.reply_text("Use a 3-letter code like GBP or CHF.")
+        return
+    await update.message.reply_text(await _set_currency(update, context, code))
+
+
+# --- errors ---
+
+async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id if isinstance(update, Update) and update.effective_user else None
+    # Never log message text: exc_info carries the traceback only.
+    log.error("handler error for user %s: %s", user_id, type(context.error).__name__, exc_info=context.error)
+    if isinstance(update, Update) and update.effective_message:
+        await update.effective_message.reply_text(GENERIC_ERROR)
+
+
+def register(app: Application, conn: sqlite3.Connection) -> None:
+    app.bot_data["conn"] = conn
+    app.bot_data["limiter"] = RateLimiter()
+    app.add_handler(TypeHandler(Update, gate), group=-1)
+    app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("currency", cmd_currency))
+    app.add_handler(CommandHandler("undo", cmd_undo))
+    app.add_handler(CommandHandler("recent", cmd_recent))
+    app.add_handler(CommandHandler("cancel", cmd_cancel))
+    app.add_handler(CallbackQueryHandler(on_delete, pattern=r"^(undo|del):\d+$"))
+    app.add_handler(CallbackQueryHandler(on_keep, pattern=r"^keep$"))
+    app.add_handler(CallbackQueryHandler(on_change_category, pattern=r"^chcat:\d+$"))
+    app.add_handler(CallbackQueryHandler(on_category, pattern=r"^cat:\d+:\d+$"))
+    app.add_handler(CallbackQueryHandler(on_edit, pattern=r"^edit:\d+$"))
+    app.add_handler(CallbackQueryHandler(on_currency_button, pattern=r"^cur:[A-Z]{3}$"))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
+    app.add_error_handler(on_error)
