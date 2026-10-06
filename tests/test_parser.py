@@ -6,9 +6,12 @@ from expense_bot.parser import (
     AMOUNT_RANGE_ERROR,
     BAD_DATE_ERROR,
     HELP_EXAMPLE,
+    RECURRING_HELP,
     ParsedEntry,
+    ParsedRecurring,
     ParseError,
     parse_entry,
+    parse_recurring,
 )
 
 TODAY = date(2026, 10, 6)
@@ -59,3 +62,21 @@ def test_year_rollover_forward():
 
 def test_year_rollover_backfill():
     assert parse_entry("10 x 30/12", date(2027, 1, 3)) == ParsedEntry(10.0, "x", date(2026, 12, 30))
+
+
+@pytest.mark.parametrize(
+    "args, expected",
+    [
+        (["12", "netflix", "monthly"], ParsedRecurring(12.0, "netflix", "monthly", TODAY)),
+        (["950", "rent", "monthly", "01/11"], ParsedRecurring(950.0, "rent", "monthly", date(2026, 11, 1))),
+        (["5", "Pret", "coffee", "Weekly"], ParsedRecurring(5.0, "Pret coffee", "weekly", TODAY)),
+        (["120", "insurance", "yearly", "today"], ParsedRecurring(120.0, "insurance", "yearly", TODAY)),
+        (["12", "netflix"], ParseError(RECURRING_HELP)),
+        (["netflix", "monthly"], ParseError(RECURRING_HELP)),
+        ([], ParseError(RECURRING_HELP)),
+        (["0", "netflix", "monthly"], ParseError(AMOUNT_RANGE_ERROR)),
+        (["12", "netflix", "monthly", "31/02"], ParseError(BAD_DATE_ERROR)),
+    ],
+)
+def test_parse_recurring(args, expected):
+    assert parse_recurring(args, TODAY) == expected

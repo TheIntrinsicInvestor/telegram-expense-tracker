@@ -81,13 +81,17 @@ def format_upcoming(entries: list[Entry], currency: str, today: date) -> str:
     return "\n".join(lines)
 
 
+NO_RECURRING = "No recurring payments. Add one with /recurring 12 netflix monthly."
+
+
+def format_recurring_line(r: Recurring, currency: str) -> str:
+    return f"{fmt_money(r.amount, currency)} · {r.category} · {r.note} · {r.frequency}, next {_short(r.next_date)}"
+
+
 def format_recurring_list(recs: list[Recurring], currency: str) -> str:
     if not recs:
-        return "No recurring payments. Add one with /recurring 12 netflix monthly."
-    lines = ["Recurring payments:"]
-    lines += [f"{fmt_money(r.amount, currency)} · {r.category} · {r.note} · {r.frequency}, next {_short(r.next_date)}"
-              for r in recs]
-    return "\n".join(lines)
+        return NO_RECURRING
+    return "\n".join(["Recurring payments:"] + [format_recurring_line(r, currency) for r in recs])
 
 
 # --- reports ---

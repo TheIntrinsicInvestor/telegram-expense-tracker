@@ -20,18 +20,29 @@ from telegram.ext import (
 
 from expense_bot import db
 from expense_bot.categories import CATEGORIES, first_word, resolve
+from expense_bot.charts import render_report_chart
 from expense_bot.clock import local_today, utc_now
 from expense_bot.formatting import (
+    DELETE_WARNING,
+    EXPORT_WARNING,
     GENERIC_ERROR,
+    HELP_TEXT,
+    NO_RECURRING,
     PRIVACY_TEXT,
     RATE_LIMITED,
     STALE,
+    date_label,
+    export_csv,
     format_entry_line,
     format_logged,
+    format_recurring_line,
+    format_report,
 )
 from expense_bot.models import User
-from expense_bot.parser import ParseError, parse_entry
+from expense_bot.money import fmt_money
+from expense_bot.parser import ParseError, parse_entry, parse_recurring
 from expense_bot.ratelimit import RateLimiter
+from expense_bot.reports import build_report
 
 log = logging.getLogger(__name__)
 
@@ -245,6 +256,137 @@ async def cmd_currency(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await update.message.reply_text(await _set_currency(update, context, code))
 
 
+# --- reports and planning ---
+
+REPORT_KINDS = {"": "month", "week": "week", "lastmonth": "lastmonth", "year": "year"}
+
+
+async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    conn, user, today = _user(update, context)
+    kind = REPORT_KINDS.get((context.args[0] if context.args else "").lower())
+    if kind is None:
+        await update.message.reply_text("Use /report, /report week, /report lastmonth or /report year.")
+        return
+    report = build_report(kind, db.all_entries(conn, user.user_id), db.active_recurring(conn, user.user_id),
+                          today, user.currency)
+    await update.message.reply_photo(photo=render_report_chart(report))
+    await update.message.reply_text(format_report(report))
+
+
+async def cmd_upcoming(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    conn, user, today = _user(update, context)
+    entries = db.upcoming_entries(conn, user.user_id, today)
+    if not entries:
+        await update.message.reply_text("Nothing planned.")
+        return
+    total = sum(e.amount for e in entries)
+    await update.message.reply_text(f"Planned payments: {fmt_money(total, user.currency)} in total")
+    for entry in entries:
+        keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("Delete", callback_data=f"del:{entry.id}")]])
+        await update.message.reply_text(format_entry_line(entry, user.currency, today), reply_markup=keyboard)
+
+
+async def cmd_recurring(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    conn, user, today = _user(update, context)
+    if not context.args:
+        recs = db.active_recurring(conn, user.user_id)
+        await update.message.reply_text("Recurring payments:" if recs else NO_RECURRING)
+        for rec in recs:
+            keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("Stop", callback_data=f"stoprec:{rec.id}")]])
+            await update.message.reply_text(format_recurring_line(rec, user.currency), reply_markup=keyboard)
+        return
+    parsed = parse_recurring(context.args, today)
+    if isinstance(parsed, ParseError):
+        await update.message.reply_text(parsed.message)
+        return
+    category = resolve(parsed.note, db.learned_words(conn, user.user_id)) or "Other"
+    db.add_recurring(conn, user.user_id, parsed.amount, category, parsed.note, parsed.frequency, parsed.start)
+    parts = [fmt_money(parsed.amount, user.currency), category, parsed.note,
+             f"{parsed.frequency} from {date_label(parsed.start, today)}"]
+    await update.message.reply_text("Recurring " + " · ".join(p for p in parts if p))
+
+
+async def on_stop_recurring(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    conn, user, _ = _user(update, context)
+    rec = db.get_recurring(conn, user.user_id, _arg_id(query.data))
+    if rec is None or not db.stop_recurring(conn, user.user_id, rec.id):
+        await query.edit_message_text(STALE)
+        return
+    await query.edit_message_text(f"Stopped: {fmt_money(rec.amount, user.currency)} {rec.note} {rec.frequency}")
+
+
+async def cmd_notify(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    conn, user, _ = _user(update, context)
+    choice = (context.args[0] if context.args else "").lower()
+    if choice not in ("on", "off"):
+        state = "on" if user.notify else "off"
+        await update.message.reply_text(f"Weekly and monthly summaries are {state}. Use /notify on or /notify off.")
+        return
+    db.set_notify(conn, user.user_id, choice == "on")
+    await update.message.reply_text(f"Weekly and monthly summaries {choice}.")
+
+
+# --- data export and deletion ---
+
+def _confirm_keyboard(prefix: str, yes_label: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[InlineKeyboardButton(yes_label, callback_data=f"{prefix}:yes"),
+                                  InlineKeyboardButton("Cancel", callback_data=f"{prefix}:no")]])
+
+
+async def cmd_export(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    _user(update, context)
+    await update.message.reply_text(EXPORT_WARNING, reply_markup=_confirm_keyboard("export", "Send CSV"))
+
+
+async def on_export(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    if query.data.endswith(":no"):
+        await query.edit_message_text("Export cancelled.")
+        return
+    conn, user, today = _user(update, context)
+    await query.edit_message_text("Here's your data.")
+    await query.message.reply_document(document=export_csv(db.all_entries(conn, user.user_id), user.currency, today),
+                                       filename="expenses.csv")
+
+
+async def cmd_deleteaccount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    _user(update, context)
+    await update.message.reply_text(DELETE_WARNING, reply_markup=_confirm_keyboard("delacct", "Delete everything"))
+
+
+async def on_deleteaccount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    if query.data.endswith(":no"):
+        await query.edit_message_text("Cancelled. Nothing was deleted.")
+        return
+    db.delete_user(_conn(context), update.effective_user.id)
+    context.user_data.clear()
+    await query.edit_message_text("All your data has been deleted.")
+
+
+async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    _user(update, context)
+    await update.message.reply_text(HELP_TEXT)
+
+
+BOT_COMMANDS = [
+    ("report", "Spending report (week, lastmonth, year)"),
+    ("recent", "Last 10 entries"),
+    ("undo", "Delete your latest entry"),
+    ("upcoming", "Planned payments"),
+    ("recurring", "Repeating payments"),
+    ("notify", "Weekly and monthly summaries on/off"),
+    ("export", "Download your data"),
+    ("currency", "Change currency"),
+    ("deleteaccount", "Erase all your data"),
+    ("help", "How to use the bot"),
+]
+
+
 # --- errors ---
 
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -264,6 +406,16 @@ def register(app: Application, conn: sqlite3.Connection) -> None:
     app.add_handler(CommandHandler("undo", cmd_undo))
     app.add_handler(CommandHandler("recent", cmd_recent))
     app.add_handler(CommandHandler("cancel", cmd_cancel))
+    app.add_handler(CommandHandler("report", cmd_report))
+    app.add_handler(CommandHandler("upcoming", cmd_upcoming))
+    app.add_handler(CommandHandler("recurring", cmd_recurring))
+    app.add_handler(CommandHandler("notify", cmd_notify))
+    app.add_handler(CommandHandler("export", cmd_export))
+    app.add_handler(CommandHandler("deleteaccount", cmd_deleteaccount))
+    app.add_handler(CommandHandler("help", cmd_help))
+    app.add_handler(CallbackQueryHandler(on_stop_recurring, pattern=r"^stoprec:\d+$"))
+    app.add_handler(CallbackQueryHandler(on_export, pattern=r"^export:(yes|no)$"))
+    app.add_handler(CallbackQueryHandler(on_deleteaccount, pattern=r"^delacct:(yes|no)$"))
     app.add_handler(CallbackQueryHandler(on_delete, pattern=r"^(undo|del):\d+$"))
     app.add_handler(CallbackQueryHandler(on_keep, pattern=r"^keep$"))
     app.add_handler(CallbackQueryHandler(on_change_category, pattern=r"^chcat:\d+$"))

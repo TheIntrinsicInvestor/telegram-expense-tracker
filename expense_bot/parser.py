@@ -5,10 +5,12 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 
 from expense_bot.money import round2
+from expense_bot.recurring import FREQUENCIES
 
 HELP_EXAMPLE = "Try 15 lunch or 150 flights 31/12/26."
 AMOUNT_RANGE_ERROR = "Amount must be more than 0 and at most 1,000,000."
 BAD_DATE_ERROR = "That date doesn't exist."
+RECURRING_HELP = "Try /recurring 12 netflix monthly or /recurring 950 rent monthly 01/11."
 
 MAX_AMOUNT = 1_000_000
 BACKFILL_DAYS = 7
@@ -24,6 +26,14 @@ class ParsedEntry:
     amount: float
     note: str
     date: date
+
+
+@dataclass(frozen=True)
+class ParsedRecurring:
+    amount: float
+    note: str
+    frequency: str
+    start: date
 
 
 @dataclass(frozen=True)
@@ -102,3 +112,24 @@ def parse_entry(text: str, today: date) -> ParsedEntry | ParseError:
     if isinstance(amount, ParseError):
         return amount
     return ParsedEntry(amount, " ".join(rest), entry_date)
+
+
+def parse_recurring(args: list[str], today: date) -> ParsedRecurring | ParseError:
+    """Parses '/recurring <amount> <note...> <weekly|monthly|yearly> [start date]'. Start defaults to today."""
+    tokens = list(args)
+    start = today
+    if tokens:
+        when = resolve_date(tokens[-1], today)
+        if isinstance(when, ParseError):
+            return when
+        if when is not None:
+            start = when
+            tokens = tokens[:-1]
+    if len(tokens) < 2 or tokens[-1].lower() not in FREQUENCIES:
+        return ParseError(RECURRING_HELP)
+    amount = parse_amount(tokens[0])
+    if amount is None:
+        return ParseError(RECURRING_HELP)
+    if isinstance(amount, ParseError):
+        return amount
+    return ParsedRecurring(amount, " ".join(tokens[1:-1]), tokens[-1].lower(), start)
