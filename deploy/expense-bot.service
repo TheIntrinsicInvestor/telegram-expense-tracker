@@ -1,0 +1,16 @@
+[Unit]
+Description=Telegram expense tracker bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/expense-bot
+Environment=EXPENSE_BOT_ENV=/home/ubuntu/expense-bot-data/expense-bot.env
+Environment=EXPENSE_BOT_MODE=live
+ExecStart=/home/ubuntu/expense-bot-env/bin/python -m expense_bot.main
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
