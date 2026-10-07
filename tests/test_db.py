@@ -40,7 +40,7 @@ def conn():
 
 
 def test_schema_version(conn):
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 1
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
 
 
 def test_ensure_user_defaults(conn):
@@ -141,3 +141,21 @@ def test_stop_recurring_twice(conn):
     assert stop_recurring(conn, 1, rid) is True
     assert stop_recurring(conn, 1, rid) is False
     assert active_recurring(conn, 1) == []
+
+
+def test_due_reminders_include_last_7_days(conn):
+    ids = {d: add_entry(conn, 1, 10, "Travel", "x", date(2026, 10, d), TODAY) for d in (12, 13, 20, 21)}
+    assert [e.id for e in due_reminders(conn, 1, date(2026, 10, 20))] == [ids[13], ids[20]]
+
+
+def test_migrates_v1_database(tmp_path):
+    path = tmp_path / "old.db"
+    c = connect(path)
+    ensure_user(c, 1, TODAY)
+    add_entry(c, 1, 5, "Other", "", TODAY, TODAY)
+    c.execute("ALTER TABLE entries DROP COLUMN notified")
+    c.execute("PRAGMA user_version = 1")
+    c.close()
+    c = connect(path)
+    assert c.execute("PRAGMA user_version").fetchone()[0] == 2
+    assert c.execute("SELECT notified FROM entries").fetchone()[0] == 1

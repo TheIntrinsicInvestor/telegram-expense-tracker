@@ -3,6 +3,7 @@
 Marking only after a successful send means a failed send is retried on the next hourly run.
 """
 
+import logging
 import sqlite3
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -10,10 +11,12 @@ from pathlib import Path
 
 from expense_bot import db
 from expense_bot.clock import local_now
-from expense_bot.formatting import format_entry_line, format_report, format_weekly_summary
-from expense_bot.models import User
+from expense_bot.formatting import date_label, format_entry_line, format_report, format_weekly_summary
 from expense_bot.money import fmt_money
+from expense_bot.models import Recurring, User
 from expense_bot.reports import ReportData, build_report
+
+log = logging.getLogger(__name__)
 
 REMINDER_HOUR = 9
 MONTHLY_HOUR = 9
@@ -37,24 +40,31 @@ def _previous_month(today: date) -> tuple[str, date, date]:
     return f"{last_day:%Y-%m}", last_day.replace(day=1), last_day
 
 
+def catch_up(conn: sqlite3.Connection, rec: Recurring | None, today: date, notified: bool = False) -> list[int]:
+    """Log every missed occurrence, each on its own date; returns the new entry ids."""
+    ids = []
+    while rec and rec.active and rec.next_date <= today:
+        entry_id = db.materialise_occurrence(conn, rec, today, notified)
+        if entry_id is not None:
+            ids.append(entry_id)
+        rec = db.get_recurring(conn, rec.user_id, rec.id)
+    return ids
+
+
 def _recurring(conn: sqlite3.Connection, user: User, today: date) -> list[Outgoing]:
-    out = []
     for rec in db.active_recurring(conn, user.user_id):
-        # Catch up every missed occurrence, each logged on its own date.
-        while rec and rec.active and rec.next_date <= today:
-            entry_id = db.materialise_occurrence(conn, rec, today)
-            if entry_id is not None:
-                entry = db.get_entry(conn, user.user_id, entry_id)
-                out.append(Outgoing(user.user_id, "Recurring: " + format_entry_line(entry, user.currency, today),
-                                    "recurring", entry_id, undo_entry_id=entry_id))
-            rec = db.get_recurring(conn, user.user_id, rec.id)
-    return out
+        catch_up(conn, rec, today)
+    # Every logged occurrence whose message hasn't gone out yet, including ones that failed to send before.
+    return [Outgoing(user.user_id, "Recurring: " + format_entry_line(e, user.currency, today), "recurring", e.id,
+                     undo_entry_id=e.id)
+            for e in db.unnotified_recurring_entries(conn, user.user_id)]
 
 
 def _reminders(conn: sqlite3.Connection, user: User, today: date) -> list[Outgoing]:
     out = []
     for e in db.due_reminders(conn, user.user_id, today):
-        text = f"Due today: {fmt_money(e.amount, user.currency)} {e.note}".rstrip()
+        when = "Due today" if e.date == today else f"Was due {date_label(e.date, today)}"
+        text = f"{when}: {fmt_money(e.amount, user.currency)} {e.note}".rstrip()
         out.append(Outgoing(user.user_id, text, "reminder", e.id))
     return out
 
@@ -62,32 +72,44 @@ def _reminders(conn: sqlite3.Connection, user: User, today: date) -> list[Outgoi
 def collect_hourly(conn: sqlite3.Connection, now_utc: datetime) -> list[Outgoing]:
     out: list[Outgoing] = []
     for user in db.all_users(conn):
-        now = local_now(user.timezone, now_utc)
-        today = now.date()
-        out += _recurring(conn, user, today)
-        if now.hour >= REMINDER_HOUR:
-            out += _reminders(conn, user, today)
-        if not user.notify:
-            continue
-        entries = db.all_entries(conn, user.user_id)
-        recurring = db.active_recurring(conn, user.user_id)
+        try:
+            out += _collect_user(conn, user, now_utc)
+        except Exception:
+            # One user's bad data must not stop everyone else's messages; they are retried next hour.
+            log.exception("hourly job failed for user %s", user.user_id)
+    return out
 
-        week_key = today.isoformat()
-        if (today.weekday() == SUNDAY and now.hour >= WEEKLY_HOUR and user.last_weekly_sent != week_key
-                and entries):
-            report = build_report("week", entries, recurring, today, user.currency)
-            out.append(Outgoing(user.user_id, format_weekly_summary(report), "weekly", week_key))
 
-        month_key, month_start, month_end = _previous_month(today)
-        if (now.hour >= MONTHLY_HOUR and user.last_monthly_sent != month_key
-                and any(month_start <= e.date <= month_end for e in entries)):
-            report = build_report("lastmonth", entries, recurring, today, user.currency)
-            out.append(Outgoing(user.user_id, format_report(report), "monthly", month_key, report=report, html=True))
+def _collect_user(conn: sqlite3.Connection, user: User, now_utc: datetime) -> list[Outgoing]:
+    out: list[Outgoing] = []
+    now = local_now(user.timezone, now_utc)
+    today = now.date()
+    out += _recurring(conn, user, today)
+    if now.hour >= REMINDER_HOUR:
+        out += _reminders(conn, user, today)
+    if not user.notify:
+        return out
+    entries = db.all_entries(conn, user.user_id)
+    recurring = db.active_recurring(conn, user.user_id)
+
+    week_key = today.isoformat()
+    if (today.weekday() == SUNDAY and now.hour >= WEEKLY_HOUR and user.last_weekly_sent != week_key
+            and entries):
+        report = build_report("week", entries, recurring, today, user.currency)
+        out.append(Outgoing(user.user_id, format_weekly_summary(report), "weekly", week_key))
+
+    month_key, month_start, month_end = _previous_month(today)
+    if (now.hour >= MONTHLY_HOUR and user.last_monthly_sent != month_key
+            and any(month_start <= e.date <= month_end for e in entries)):
+        report = build_report("lastmonth", entries, recurring, today, user.currency)
+        out.append(Outgoing(user.user_id, format_report(report), "monthly", month_key, report=report, html=True))
     return out
 
 
 def mark_sent(conn: sqlite3.Connection, out: Outgoing) -> None:
-    if out.kind == "reminder":
+    if out.kind == "recurring":
+        db.mark_notified(conn, out.user_id, out.ref)
+    elif out.kind == "reminder":
         db.mark_reminded(conn, out.user_id, out.ref)
     elif out.kind == "weekly":
         db.set_last_weekly(conn, out.user_id, out.ref)

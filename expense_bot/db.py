@@ -1,14 +1,15 @@
 """All SQLite access. Every function that touches user data filters on user_id."""
 
 import sqlite3
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from expense_bot.models import Entry, Recurring, User
 from expense_bot.money import round2
 from expense_bot.recurring import next_occurrence
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+REMINDER_GRACE_DAYS = 7  # a reminder missed while the bot was down is still sent this late
 
 _SCHEMA = """
 CREATE TABLE users (
@@ -40,7 +41,8 @@ CREATE TABLE entries (
     date TEXT NOT NULL,
     recurring_id INTEGER REFERENCES recurring ON DELETE SET NULL,
     reminded INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    notified INTEGER NOT NULL DEFAULT 1
 );
 CREATE TABLE user_keywords (
     user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE,
@@ -61,10 +63,16 @@ def connect(path: str | Path) -> sqlite3.Connection:
     conn = sqlite3.connect(str(path))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
-    if conn.execute("PRAGMA user_version").fetchone()[0] == 0:
+    version = conn.execute("PRAGMA user_version").fetchone()[0]
+    if version == 0:
         with conn:
             conn.executescript(_SCHEMA)
             conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+    elif version == 1:
+        # v2: entries.notified, 0 while a recurring payment's "Recurring: ..." message is unsent.
+        with conn:
+            conn.execute("ALTER TABLE entries ADD COLUMN notified INTEGER NOT NULL DEFAULT 1")
+            conn.execute("PRAGMA user_version = 2")
     return conn
 
 
@@ -192,8 +200,9 @@ def upcoming_entries(conn: sqlite3.Connection, user_id: int, today: date) -> lis
 
 
 def due_reminders(conn: sqlite3.Connection, user_id: int, today: date) -> list[Entry]:
-    rows = conn.execute("SELECT * FROM entries WHERE user_id = ? AND date = ? AND reminded = 0 ORDER BY id",
-                        (user_id, today.isoformat()))
+    earliest = today - timedelta(days=REMINDER_GRACE_DAYS)
+    rows = conn.execute("SELECT * FROM entries WHERE user_id = ? AND date BETWEEN ? AND ? AND reminded = 0 "
+                        "ORDER BY date, id", (user_id, earliest.isoformat(), today.isoformat()))
     return [_entry(r) for r in rows]
 
 
@@ -242,7 +251,8 @@ def stop_recurring(conn: sqlite3.Connection, user_id: int, rid: int) -> bool:
                   (rid, user_id)) == 1
 
 
-def materialise_occurrence(conn: sqlite3.Connection, rec: Recurring, today: date) -> int | None:
+def materialise_occurrence(conn: sqlite3.Connection, rec: Recurring, today: date,
+                           notified: bool = False) -> int | None:
     """Log one due occurrence and advance next_date atomically. A stale `rec` changes nothing."""
     following = next_occurrence(rec.next_date, rec.frequency, rec.anchor_day)
     with conn:
@@ -253,8 +263,18 @@ def materialise_occurrence(conn: sqlite3.Connection, rec: Recurring, today: date
         if moved != 1:
             return None
         cur = conn.execute(
-            "INSERT INTO entries (user_id, amount, category, note, date, recurring_id, reminded, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, 1, ?)",
-            (rec.user_id, rec.amount, rec.category, rec.note, rec.next_date.isoformat(), rec.id, _now_iso()),
+            "INSERT INTO entries (user_id, amount, category, note, date, recurring_id, reminded, created_at, notified) "
+            "VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)",
+            (rec.user_id, rec.amount, rec.category, rec.note, rec.next_date.isoformat(), rec.id, _now_iso(),
+             int(notified)),
         )
     return cur.lastrowid
+
+
+def unnotified_recurring_entries(conn: sqlite3.Connection, user_id: int) -> list[Entry]:
+    rows = conn.execute("SELECT * FROM entries WHERE user_id = ? AND notified = 0 ORDER BY date, id", (user_id,))
+    return [_entry(r) for r in rows]
+
+
+def mark_notified(conn: sqlite3.Connection, user_id: int, entry_id: int) -> None:
+    _write(conn, "UPDATE entries SET notified = 1 WHERE id = ? AND user_id = ?", (entry_id, user_id))
