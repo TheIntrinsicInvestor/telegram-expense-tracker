@@ -8,6 +8,7 @@ from datetime import date
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
+from telegram.error import NetworkError
 from telegram.ext import (
     Application,
     ApplicationHandlerStop,
@@ -417,6 +418,10 @@ BOT_COMMANDS = [
 # --- errors ---
 
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # Polling blips (no update attached) retry on their own: one line, no traceback.
+    if update is None and isinstance(context.error, NetworkError):
+        log.warning("polling network error: %s: %s", type(context.error).__name__, context.error)
+        return
     user_id = update.effective_user.id if isinstance(update, Update) and update.effective_user else None
     # Never log message text: exc_info carries the traceback only.
     log.error("handler error for user %s: %s", user_id, type(context.error).__name__, exc_info=context.error)

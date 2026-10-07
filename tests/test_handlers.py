@@ -64,3 +64,25 @@ import pytest  # noqa: E402
                                             (["x"], None)])
 def test_recent_limit(args, expected):
     assert handlers.recent_limit(args) == expected
+
+
+def run_on_error(error, update=None):
+    import asyncio
+    from types import SimpleNamespace
+    asyncio.run(handlers.on_error(update, SimpleNamespace(error=error, user_data={})))
+
+
+def test_polling_network_error_logs_one_warning_line(caplog):
+    from telegram.error import NetworkError
+    run_on_error(NetworkError("httpx.ReadError: "))
+    [record] = caplog.records
+    assert record.levelname == "WARNING"
+    assert record.exc_info is None
+    assert "NetworkError" in record.getMessage()
+
+
+def test_other_errors_still_log_traceback(caplog):
+    run_on_error(ValueError("boom"))
+    [record] = caplog.records
+    assert record.levelname == "ERROR"
+    assert record.exc_info is not None
