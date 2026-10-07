@@ -22,7 +22,6 @@ def test_load_config_defaults_to_test_token(env_file):
     assert cfg.db_path == Path("/data/x.db")
     assert cfg.backup_dir == Path("/data/backups")
     assert cfg.invite_code == "abc123"
-    assert cfg.invite_code == "abc123"
 
 
 def test_load_config_live_mode_uses_live_token(env_file, monkeypatch):
@@ -53,5 +52,12 @@ def test_load_config_missing_key_raises(env_file, monkeypatch):
 
 def test_load_config_requires_invite_code(env_file):
     env_file.write_text("TEST_TELEGRAM_TOKEN=abc\nDB_PATH=/data/x.db\nBACKUP_DIR=/data/backups\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="INVITE_CODE"):
+        load_config()
+
+
+@pytest.mark.parametrize("code", ["has space", "aB3+x/9=", "café", "x" * 65])
+def test_load_config_rejects_codes_telegram_cannot_carry(env_file, code):
+    env_file.write_text(f"TEST_TELEGRAM_TOKEN=abc\nDB_PATH=/d.db\nBACKUP_DIR=/b\nINVITE_CODE={code}\n", encoding="utf-8")
     with pytest.raises(RuntimeError, match="INVITE_CODE"):
         load_config()

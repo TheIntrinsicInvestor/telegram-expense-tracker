@@ -70,7 +70,6 @@ def main() -> None:
     conn = db.connect(config.db_path)
     app = Application.builder().token(config.token).post_init(post_init).post_shutdown(post_shutdown).build()
     app.bot_data["config"] = config
-    app.bot_data["invite_code"] = config.invite_code
     register(app, conn)
     app.job_queue.run_repeating(hourly, interval=HOURLY_SECONDS, first=10)
     app.job_queue.run_daily(nightly_backup, time=BACKUP_TIME)

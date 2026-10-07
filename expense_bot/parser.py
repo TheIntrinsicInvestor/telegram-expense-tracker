@@ -18,6 +18,7 @@ BAD_DATE_ERROR = "That date doesn't exist."
 RECURRING_HELP = "Try /recurring 12 netflix monthly or /recurring 950 rent monthly 01/11."
 DATE_RANGE_ERROR = "Use a date from last year up to 10 years ahead."
 RECURRING_START_ERROR = "A recurring payment can start at most 31 days ago."
+NOTE_TOO_LONG = "Keep the note under 200 characters."
 
 MAX_AMOUNT = 1_000_000
 BACKFILL_DAYS = 7
@@ -25,6 +26,8 @@ BACKFILL_DAYS = 7
 YEARS_BACK = 1
 YEARS_AHEAD = 10
 RECURRING_MAX_DAYS_BACK = 31
+# Keeps every message that quotes a note well under Telegram's 4096-character limit.
+MAX_NOTE_LENGTH = 200
 
 _AMOUNT_RE = re.compile(r"^[£$€]?(\d{1,3}(?:,\d{3})+|\d+)(\.\d{1,2})?$")
 _DATE_RE = re.compile(r"^(\d{1,2})/(\d{1,2})(?:/(\d{2}|\d{4}))?$")
@@ -132,7 +135,10 @@ def parse_entry(text: str, today: date) -> ParsedEntry | ParseError:
         return ParseError(HELP_EXAMPLE)
     if isinstance(amount, ParseError):
         return amount
-    return ParsedEntry(amount, tidy_note(rest), entry_date)
+    note = tidy_note(rest)
+    if len(note) > MAX_NOTE_LENGTH:
+        return ParseError(NOTE_TOO_LONG)
+    return ParsedEntry(amount, note, entry_date)
 
 
 def parse_recurring(args: list[str], today: date) -> ParsedRecurring | ParseError:
@@ -155,4 +161,7 @@ def parse_recurring(args: list[str], today: date) -> ParsedRecurring | ParseErro
         return ParseError(RECURRING_HELP)
     if isinstance(amount, ParseError):
         return amount
-    return ParsedRecurring(amount, tidy_note(tokens[1:-1]), tokens[-1].lower(), start)
+    note = tidy_note(tokens[1:-1])
+    if len(note) > MAX_NOTE_LENGTH:
+        return ParseError(NOTE_TOO_LONG)
+    return ParsedRecurring(amount, note, tokens[-1].lower(), start)

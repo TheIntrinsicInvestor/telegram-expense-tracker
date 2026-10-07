@@ -6,6 +6,8 @@ from expense_bot.parser import (
     AMOUNT_RANGE_ERROR,
     BAD_DATE_ERROR,
     HELP_EXAMPLE,
+    MAX_NOTE_LENGTH,
+    NOTE_TOO_LONG,
     RECURRING_HELP,
     ParsedEntry,
     ParsedRecurring,
@@ -115,3 +117,10 @@ def test_help_example_is_a_cheat_sheet():
         "12 taxi 03/10  (a past date)\n"
         "150 flights 31/12/26  (planned)"
     )
+
+
+def test_long_note_is_rejected():
+    long_note = "x" * (MAX_NOTE_LENGTH + 1)
+    assert parse_entry(f"15 {long_note}", TODAY) == ParseError(NOTE_TOO_LONG)
+    assert parse_recurring(["9", long_note, "weekly"], TODAY) == ParseError(NOTE_TOO_LONG)
+    assert isinstance(parse_entry("15 " + "x" * MAX_NOTE_LENGTH, TODAY), ParsedEntry)

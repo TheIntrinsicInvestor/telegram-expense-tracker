@@ -75,26 +75,11 @@ def format_logged(e: Entry, currency: str, today: date) -> str:
     return f"{verb} {format_entry_line(e, currency, today)}"
 
 
-def format_upcoming(entries: list[Entry], currency: str, today: date) -> str:
-    if not entries:
-        return "Nothing planned."
-    total = sum(e.amount for e in entries)
-    lines = [f"Planned payments: {fmt_money(total, currency)} in total"]
-    lines += [format_entry_line(e, currency, today) for e in entries]
-    return "\n".join(lines)
-
-
 NO_RECURRING = "No recurring payments. Add one with /recurring 12 netflix monthly."
 
 
 def format_recurring_line(r: Recurring, currency: str) -> str:
     return f"{fmt_money(r.amount, currency)} · {r.category} · {r.note} · {r.frequency}, next {_short(r.next_date)}"
-
-
-def format_recurring_list(recs: list[Recurring], currency: str) -> str:
-    if not recs:
-        return NO_RECURRING
-    return "\n".join(["Recurring payments:"] + [format_recurring_line(r, currency) for r in recs])
 
 
 # --- reports ---

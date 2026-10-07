@@ -66,12 +66,12 @@ def _conn(context: ContextTypes.DEFAULT_TYPE) -> sqlite3.Connection:
 
 
 def _user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> tuple[sqlite3.Connection, User, date]:
+    """The user the gate admitted. Only /start with the invite code creates users, so a missing row stops here."""
     conn = _conn(context)
-    user_id = update.effective_user.id
-    existing = db.get_user(conn, user_id)
-    today = local_today(existing.timezone if existing else "Europe/London", utc_now())
-    user = existing or db.ensure_user(conn, user_id, today)
-    return conn, user, today
+    user = context.user_data.get("user") or db.get_user(conn, update.effective_user.id)
+    if user is None:
+        raise ApplicationHandlerStop
+    return conn, user, local_today(user.timezone, utc_now())
 
 
 def logged_keyboard(entry_id: int) -> InlineKeyboardMarkup:
@@ -96,33 +96,40 @@ def _arg_id(data: str, position: int = 1) -> int:
 
 # --- gate: rate limit every update, admit only existing users or invite-link holders ---
 
-def _admitted(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    if db.get_user(_conn(context), update.effective_user.id) is not None:
-        return True
+def _has_invite(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     text = update.message.text if update.message and update.message.text else ""
     command, _, code = text.partition(" ")
-    return command == "/start" and secrets.compare_digest(code.strip(), context.bot_data["invite_code"])
+    # Compared as bytes: compare_digest rejects str with non-ASCII characters.
+    return command == "/start" and secrets.compare_digest(code.strip().encode(),
+                                                          context.bot_data["config"].invite_code.encode())
 
 
 async def gate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.effective_user:
         raise ApplicationHandlerStop
-    limiter: RateLimiter = context.bot_data["limiter"]
-    verdict = limiter.check(update.effective_user.id, time.monotonic())
-    if verdict == "ok":
-        if _admitted(update, context):
-            return
-        # Strangers get one line and nothing is stored for them.
-        if update.callback_query:
-            await update.callback_query.answer()
-        elif update.effective_message:
-            await update.effective_message.reply_text(INVITE_ONLY)
-        raise ApplicationHandlerStop
-    if update.callback_query:
-        # Always answer a button tap, or its spinner hangs; the warning shows as a toast.
-        await update.callback_query.answer(*((RATE_LIMITED,) if verdict == "warn" else ()))
-    elif verdict == "warn" and update.effective_message:
-        await update.effective_message.reply_text(RATE_LIMITED)
+    # Any error below drops the update: an exception that escaped would let PTB run the handlers anyway.
+    try:
+        limiter: RateLimiter = context.bot_data["limiter"]
+        verdict = limiter.check(update.effective_user.id, time.monotonic())
+        if verdict == "ok":
+            user = db.get_user(_conn(context), update.effective_user.id)
+            if user is not None:
+                context.user_data["user"] = user  # read once here, reused by the handler
+                return
+            if _has_invite(update, context):
+                return
+            # Strangers get one line and nothing is stored for them.
+            if update.callback_query:
+                await update.callback_query.answer()
+            elif update.effective_message:
+                await update.effective_message.reply_text(INVITE_ONLY)
+        elif update.callback_query:
+            # Always answer a button tap, or its spinner hangs; the warning shows as a toast.
+            await update.callback_query.answer(*((RATE_LIMITED,) if verdict == "warn" else ()))
+        elif verdict == "warn" and update.effective_message:
+            await update.effective_message.reply_text(RATE_LIMITED)
+    except Exception:
+        log.exception("gate failed; update dropped")
     raise ApplicationHandlerStop
 
 
@@ -278,6 +285,9 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 # --- settings ---
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    conn = _conn(context)
+    if "user" not in context.user_data and _has_invite(update, context):
+        db.ensure_user(conn, update.effective_user.id, local_today("Europe/London", utc_now()))
     _, user, _ = _user(update, context)
     keyboard = InlineKeyboardMarkup([[InlineKeyboardButton(code, callback_data=f"cur:{code}")
                                       for code in CURRENCY_BUTTONS]])

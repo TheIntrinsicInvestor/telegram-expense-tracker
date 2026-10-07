@@ -66,7 +66,7 @@ Then start it:
 EXPENSE_BOT_ENV=~/expense-bot/bot.env python -m expense_bot.main
 ```
 
-New users join with the link `https://t.me/<your_bot>?start=<INVITE_CODE>`. Anyone who finds the bot without it gets a polite "invite-only" reply, and nothing is stored about them.
+New users join with the link `https://t.me/<your_bot>?start=<INVITE_CODE>`. Telegram only carries a code of 1 to 64 letters, digits, `_` or `-`, so the bot refuses to start with anything else. Anyone who finds the bot without it gets a polite "invite-only" reply, and nothing is stored about them.
 
 If you keep a separate bot for production, put its token in `LIVE_TELEGRAM_TOKEN` and set `EXPENSE_BOT_MODE=live`. Without that, the bot always uses the test token, so a local run can't take over your real bot by accident. `deploy/expense-bot.service` is the systemd unit I use on my server.
 
