@@ -20,7 +20,7 @@ from telegram.ext import (
     filters,
 )
 
-from expense_bot import db
+from expense_bot import db, jobs
 from expense_bot.categories import CATEGORIES, first_word, resolve
 from expense_bot.card import build_card_html
 from expense_bot.clock import local_today, utc_now
@@ -54,6 +54,7 @@ log = logging.getLogger(__name__)
 
 CURRENCY_BUTTONS = ("GBP", "EUR", "USD", "SGD")
 _CURRENCY_RE = re.compile(r"^[A-Z]{3}$")
+EDIT_TIMEOUT_SECONDS = 600
 
 
 # --- shared helpers ---
@@ -78,7 +79,8 @@ def logged_keyboard(entry_id: int) -> InlineKeyboardMarkup:
 
 def category_keyboard(entry_id: int) -> InlineKeyboardMarkup:
     buttons = [InlineKeyboardButton(name, callback_data=f"cat:{entry_id}:{i}") for i, name in enumerate(CATEGORIES)]
-    return InlineKeyboardMarkup([buttons[i:i + 3] for i in range(0, len(buttons), 3)])
+    rows = [buttons[i:i + 3] for i in range(0, len(buttons), 3)]
+    return InlineKeyboardMarkup(rows + [[InlineKeyboardButton("Undo", callback_data=f"undo:{entry_id}")]])
 
 
 def entry_keyboard(entry_id: int) -> InlineKeyboardMarkup:
@@ -99,7 +101,10 @@ async def gate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     verdict = limiter.check(update.effective_user.id, time.monotonic())
     if verdict == "ok":
         return
-    if verdict == "warn" and update.effective_message:
+    if update.callback_query:
+        # Always answer a button tap, or its spinner hangs; the warning shows as a toast.
+        await update.callback_query.answer(*((RATE_LIMITED,) if verdict == "warn" else ()))
+    elif verdict == "warn" and update.effective_message:
         await update.effective_message.reply_text(RATE_LIMITED)
     raise ApplicationHandlerStop
 
@@ -114,10 +119,9 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     category = resolve(parsed.note, db.learned_words(conn, user.user_id))
-    editing = context.user_data.get("editing")
+    editing = _take_editing(context.user_data)
     if editing is not None:
         old = db.get_entry(conn, user.user_id, editing)
-        context.user_data.pop("editing", None)
         if old is None:
             await update.message.reply_text(STALE)
             return
@@ -125,8 +129,9 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                         parsed.date, today)
         context.user_data["saved_update"] = update.update_id
         entry = db.get_entry(conn, user.user_id, editing)
-        text = format_logged(entry, user.currency, today)
-        await update.message.reply_text("Updated " + text.split(" ", 1)[1], reply_markup=logged_keyboard(entry.id))
+        verb = "Updated (planned)" if entry.date > today else "Updated"
+        await update.message.reply_text(f"{verb} {format_entry_line(entry, user.currency, today)}",
+                                        reply_markup=logged_keyboard(entry.id))
         return
 
     entry_id = db.add_entry(conn, user.user_id, parsed.amount, category or "Other", parsed.note, parsed.date, today)
@@ -236,12 +241,20 @@ async def on_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await query.edit_message_text(STALE)
         return
     context.user_data["editing"] = entry.id
+    context.user_data["editing_at"] = time.monotonic()
     await query.message.reply_text("Send the corrected entry, e.g. 16 lunch 05/10. /cancel to stop.")
+
+
+def _take_editing(user_data: dict) -> int | None:
+    """Ends edit mode and returns the entry being edited, unless it was started too long ago."""
+    entry_id = user_data.pop("editing", None)
+    started = user_data.pop("editing_at", 0.0)
+    return entry_id if time.monotonic() - started <= EDIT_TIMEOUT_SECONDS else None
 
 
 async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     _user(update, context)
-    stopped = context.user_data.pop("editing", None) is not None
+    stopped = _take_editing(context.user_data) is not None
     await update.message.reply_text("Edit cancelled." if stopped else "Nothing to cancel.")
 
 
@@ -328,10 +341,17 @@ async def cmd_recurring(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await update.message.reply_text(parsed.message)
         return
     category = resolve(parsed.note, db.learned_words(conn, user.user_id)) or "Other"
-    db.add_recurring(conn, user.user_id, parsed.amount, category, parsed.note, parsed.frequency, parsed.start)
+    rid = db.add_recurring(conn, user.user_id, parsed.amount, category, parsed.note, parsed.frequency, parsed.start)
+    # Log anything already due now rather than at the next hourly run; this reply is its notice.
+    logged = len(jobs.catch_up(conn, db.get_recurring(conn, user.user_id, rid), today, notified=True))
     parts = [fmt_money(parsed.amount, user.currency), category, parsed.note,
              f"{parsed.frequency} from {date_label(parsed.start, today)}"]
-    await update.message.reply_text("Recurring " + " · ".join(p for p in parts if p))
+    text = "Recurring " + " · ".join(p for p in parts if p)
+    if logged == 1 and parsed.start == today:
+        text += "\nLogged today's payment."
+    elif logged:
+        text += f"\nLogged {logged} payment{'s' if logged > 1 else ''} due so far."
+    await update.message.reply_text(text)
 
 
 async def on_stop_recurring(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
