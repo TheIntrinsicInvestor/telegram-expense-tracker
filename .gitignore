@@ -7,3 +7,10 @@ backups/
 __pycache__/
 .venv/
 .pytest_cache/
+
+# Private working notes (kept locally, not published)
+CLAUDE.md
+HISTORY.md
+HANDOFF.md
+docs/superpowers/
+.superpowers/
