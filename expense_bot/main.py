@@ -23,11 +23,15 @@ BACKUP_TIME = time(3, 0, tzinfo=ZoneInfo("Europe/London"))
 
 async def hourly(context: ContextTypes.DEFAULT_TYPE) -> None:
     conn = context.bot_data["conn"]
+    # Cards already delivered whose text failed: the retry sends only the text, not the card again.
+    cards_sent = context.bot_data.setdefault("cards_sent", set())
     for out in jobs.collect_hourly(conn, utc_now()):
         try:
-            if out.report is not None:
+            card_key = (out.user_id, out.kind, out.ref)
+            if out.report is not None and card_key not in cards_sent:
                 card = await context.bot_data["renderer"].render(build_card_html(out.report))
                 await context.bot.send_photo(chat_id=out.user_id, photo=card)
+                cards_sent.add(card_key)
             markup = None
             if out.undo_entry_id:
                 markup = InlineKeyboardMarkup([[InlineKeyboardButton("Undo", callback_data=f"undo:{out.undo_entry_id}")]])
