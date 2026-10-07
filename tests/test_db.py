@@ -1,8 +1,9 @@
-from datetime import date
+from datetime import date, datetime, timezone
 
 import pytest
 
 from expense_bot.db import (
+    UserStats,
     active_recurring,
     add_entry,
     add_recurring,
@@ -26,6 +27,7 @@ from expense_bot.db import (
     stop_recurring,
     upcoming_entries,
     update_entry,
+    user_stats,
 )
 
 TODAY = date(2026, 10, 6)
@@ -37,6 +39,18 @@ def conn():
     ensure_user(c, 1, TODAY)
     ensure_user(c, 2, TODAY)
     return c
+
+
+def test_user_stats(conn):
+    now = datetime(2026, 10, 6, 12, tzinfo=timezone.utc)
+    ensure_user(conn, 3, TODAY)
+    conn.execute("UPDATE users SET created_at = '2026-08-01T00:00:00+00:00' WHERE user_id IN (1, 2)")
+    add_entry(conn, 1, 5, "Other", "", TODAY, TODAY)  # logged now: active this week
+    old = add_entry(conn, 2, 5, "Other", "", TODAY, TODAY)
+    conn.execute("UPDATE entries SET created_at = '2026-09-20T00:00:00+00:00' WHERE id = ?", (old,))
+    rid = add_recurring(conn, 3, 9, "Subscriptions", "netflix", "monthly", TODAY)
+    add_entry(conn, 3, 9, "Subscriptions", "netflix", TODAY, TODAY, recurring_id=rid)  # automatic: not activity
+    assert user_stats(conn, now) == UserStats(total=3, joined_7d=1, active_7d=1, active_30d=2)
 
 
 def test_schema_version(conn):

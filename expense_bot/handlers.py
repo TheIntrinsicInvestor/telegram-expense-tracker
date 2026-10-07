@@ -44,6 +44,7 @@ from expense_bot.formatting import (
     format_logged,
     format_recurring_line,
     format_report,
+    format_stats,
 )
 from expense_bot.models import User
 from expense_bot.money import fmt_money
@@ -284,10 +285,23 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 # --- settings ---
 
+async def _tell_owner_about_signup(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> None:
+    owner_id = context.bot_data["config"].owner_id
+    if owner_id is None or owner_id == user_id:
+        return
+    total = db.user_stats(_conn(context), utc_now()).total
+    try:
+        await context.bot.send_message(owner_id, f"New user joined. {total} users total.")
+    except Exception:
+        log.exception("could not tell the owner about a new user")  # never blocks the sign-up
+
+
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     conn = _conn(context)
-    if "user" not in context.user_data and _has_invite(update, context):
-        db.ensure_user(conn, update.effective_user.id, local_today("Europe/London", utc_now()))
+    user_id = update.effective_user.id
+    if "user" not in context.user_data and _has_invite(update, context) and db.get_user(conn, user_id) is None:
+        db.ensure_user(conn, user_id, local_today("Europe/London", utc_now()))
+        await _tell_owner_about_signup(context, user_id)
     _, user, _ = _user(update, context)
     keyboard = InlineKeyboardMarkup([[InlineKeyboardButton(code, callback_data=f"cur:{code}")
                                       for code in CURRENCY_BUTTONS]])
@@ -443,6 +457,13 @@ async def on_deleteaccount(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await query.edit_message_text("All your data has been deleted.")
 
 
+async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Owner only, and left out of the command menu. Anyone else gets no reply, as for an unknown command."""
+    if update.effective_user.id != context.bot_data["config"].owner_id:
+        return
+    await update.message.reply_text(format_stats(db.user_stats(_conn(context), utc_now())))
+
+
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     _user(update, context)
     await update.message.reply_text(HELP_TEXT)
@@ -491,7 +512,7 @@ async def on_edited(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 COMMANDS = {
     "start": cmd_start, "currency": cmd_currency, "undo": cmd_undo, "recent": cmd_recent, "cancel": cmd_cancel,
     "report": cmd_report, "upcoming": cmd_upcoming, "recurring": cmd_recurring, "notify": cmd_notify,
-    "export": cmd_export, "deleteaccount": cmd_deleteaccount, "help": cmd_help,
+    "export": cmd_export, "deleteaccount": cmd_deleteaccount, "help": cmd_help, "stats": cmd_stats,
 }
 
 

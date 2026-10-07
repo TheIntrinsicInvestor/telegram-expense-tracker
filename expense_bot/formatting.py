@@ -5,6 +5,7 @@ import io
 from html import escape
 from datetime import date, timedelta
 
+from expense_bot.db import UserStats
 from expense_bot.models import Entry, Recurring
 from expense_bot.money import fmt_money, fmt_signed
 from expense_bot.reports import ReportData
@@ -75,7 +76,15 @@ def format_logged(e: Entry, currency: str, today: date) -> str:
     return f"{verb} {format_entry_line(e, currency, today)}"
 
 
-NO_RECURRING = "No recurring payments. Add one with /recurring 12 netflix monthly."
+def format_stats(s: UserStats) -> str:
+    return (f"Users: {s.total}\n"
+            f"Joined in the last 7 days: {s.joined_7d}\n"
+            f"Active in the last 7 days: {s.active_7d}\n"
+            f"Active in the last 30 days: {s.active_30d}\n"
+            "Active means they logged an entry themselves.")
+
+
+NO_RECURRING ="No recurring payments. Add one with /recurring 12 netflix monthly."
 
 
 def format_recurring_line(r: Recurring, currency: str) -> str:

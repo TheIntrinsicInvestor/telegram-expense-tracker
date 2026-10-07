@@ -1,6 +1,7 @@
 """All SQLite access. Every function that touches user data filters on user_id."""
 
 import sqlite3
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -119,6 +120,26 @@ def get_user(conn: sqlite3.Connection, user_id: int) -> User | None:
 
 def all_users(conn: sqlite3.Connection) -> list[User]:
     return [_user(r) for r in conn.execute("SELECT * FROM users ORDER BY user_id")]
+
+
+@dataclass(frozen=True)
+class UserStats:
+    total: int
+    joined_7d: int
+    active_7d: int  # logged an entry themselves; automatic recurring entries don't count
+    active_30d: int
+
+
+def user_stats(conn: sqlite3.Connection, now_utc: datetime) -> UserStats:
+    """Counts across all users, for the owner's /stats. Returns numbers only, never anyone's data."""
+    since = {days: (now_utc - timedelta(days=days)).isoformat(timespec="seconds") for days in (7, 30)}
+    active = "SELECT COUNT(DISTINCT user_id) FROM entries WHERE recurring_id IS NULL AND created_at >= ?"
+    return UserStats(
+        total=conn.execute("SELECT COUNT(*) FROM users").fetchone()[0],
+        joined_7d=conn.execute("SELECT COUNT(*) FROM users WHERE created_at >= ?", (since[7],)).fetchone()[0],
+        active_7d=conn.execute(active, (since[7],)).fetchone()[0],
+        active_30d=conn.execute(active, (since[30],)).fetchone()[0],
+    )
 
 
 def set_currency(conn: sqlite3.Connection, user_id: int, code: str) -> None:

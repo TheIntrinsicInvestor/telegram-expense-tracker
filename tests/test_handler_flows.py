@@ -28,12 +28,17 @@ def conn():
     return db.connect(":memory:")
 
 
-def fake(conn, text=None, args=None, user_data=None, query=None):
+OWNER = 99
+
+
+def fake(conn, text=None, args=None, user_data=None, query=None, user_id=1):
     message = SimpleNamespace(text=text, reply_text=AsyncMock())
-    update = SimpleNamespace(effective_user=SimpleNamespace(id=1), message=message, update_id=5,
+    update = SimpleNamespace(effective_user=SimpleNamespace(id=user_id), message=message, update_id=5,
                              effective_message=message, callback_query=query)
-    bot_data = {"conn": conn, "limiter": RateLimiter(limit=1), "config": SimpleNamespace(invite_code="s3cret")}
-    context = SimpleNamespace(bot_data=bot_data, user_data={} if user_data is None else user_data, args=args or [])
+    config = SimpleNamespace(invite_code="s3cret", owner_id=OWNER)
+    bot_data = {"conn": conn, "limiter": RateLimiter(limit=1), "config": config}
+    context = SimpleNamespace(bot_data=bot_data, user_data={} if user_data is None else user_data, args=args or [],
+                              bot=SimpleNamespace(send_message=AsyncMock()))
     return update, context
 
 
@@ -149,3 +154,36 @@ def test_only_start_with_the_code_creates_a_user(conn, handler, text):
     with pytest.raises(ApplicationHandlerStop):
         run(handler, update, context)
     assert db.get_user(conn, 1) is None
+
+
+def test_owner_is_told_when_someone_joins(conn):
+    db.ensure_user(conn, OWNER, TODAY)
+    update, context = fake(conn, "/start s3cret")
+    run(handlers.cmd_start, update, context)
+    context.bot.send_message.assert_awaited_once_with(OWNER, "New user joined. 2 users total.")
+
+
+def test_failed_owner_alert_does_not_block_joining(conn):
+    update, context = fake(conn, "/start s3cret")
+    context.bot.send_message.side_effect = RuntimeError("down")
+    run(handlers.cmd_start, update, context)
+    assert db.get_user(conn, 1) is not None
+    update.message.reply_text.assert_awaited_once()
+
+
+def test_existing_user_restarting_sends_no_alert(conn):
+    db.ensure_user(conn, 1, TODAY)
+    update, context = fake(conn, "/start s3cret")
+    run(handlers.cmd_start, update, context)
+    context.bot.send_message.assert_not_awaited()
+
+
+def test_stats_answers_only_the_owner(conn):
+    db.ensure_user(conn, OWNER, TODAY)
+    db.ensure_user(conn, 1, TODAY)
+    update, context = fake(conn, "/stats")
+    run(handlers.cmd_stats, update, context)
+    update.message.reply_text.assert_not_awaited()
+    update, context = fake(conn, "/stats", user_id=OWNER)
+    run(handlers.cmd_stats, update, context)
+    assert update.message.reply_text.call_args.args[0].startswith("Users: 2")

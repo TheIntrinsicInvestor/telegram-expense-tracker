@@ -56,7 +56,14 @@ def test_load_config_requires_invite_code(env_file):
         load_config()
 
 
-@pytest.mark.parametrize("code", ["has space", "aB3+x/9=", "café", "x" * 65])
+def test_owner_id_is_optional(env_file):
+    env_file.write_text("TEST_TELEGRAM_TOKEN=abc\n" + PATHS, encoding="utf-8")
+    assert load_config().owner_id is None
+    env_file.write_text("TEST_TELEGRAM_TOKEN=abc\nOWNER_ID=2141\n" + PATHS, encoding="utf-8")
+    assert load_config().owner_id == 2141
+
+
+@pytest.mark.parametrize("code",["has space", "aB3+x/9=", "café", "x" * 65])
 def test_load_config_rejects_codes_telegram_cannot_carry(env_file, code):
     env_file.write_text(f"TEST_TELEGRAM_TOKEN=abc\nDB_PATH=/d.db\nBACKUP_DIR=/b\nINVITE_CODE={code}\n", encoding="utf-8")
     with pytest.raises(RuntimeError, match="INVITE_CODE"):

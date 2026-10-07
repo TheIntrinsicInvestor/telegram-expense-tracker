@@ -22,6 +22,7 @@ class Config:
     db_path: Path
     backup_dir: Path
     invite_code: str  # new users join only via t.me/<bot>?start=<invite_code>
+    owner_id: int | None = None  # Telegram user ID that may use /stats and hears about sign-ups
 
 
 def load_config() -> Config:
@@ -43,4 +44,5 @@ def load_config() -> Config:
         db_path=Path(values["DB_PATH"]),
         backup_dir=Path(values["BACKUP_DIR"]),
         invite_code=values["INVITE_CODE"],
+        owner_id=int(values["OWNER_ID"]) if values.get("OWNER_ID") else None,
     )
