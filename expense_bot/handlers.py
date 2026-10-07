@@ -2,6 +2,7 @@
 
 import logging
 import re
+import secrets
 import sqlite3
 import time
 from datetime import date
@@ -31,6 +32,7 @@ from expense_bot.formatting import (
     EXPORT_WARNING,
     GENERIC_ERROR,
     HELP_TEXT,
+    INVITE_ONLY,
     NO_RECURRING,
     PRIVACY_TEXT,
     RATE_LIMITED,
@@ -92,7 +94,15 @@ def _arg_id(data: str, position: int = 1) -> int:
     return int(data.split(":")[position])
 
 
-# --- gate: rate limit every update ---
+# --- gate: rate limit every update, admit only existing users or invite-link holders ---
+
+def _admitted(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    if db.get_user(_conn(context), update.effective_user.id) is not None:
+        return True
+    text = update.message.text if update.message and update.message.text else ""
+    command, _, code = text.partition(" ")
+    return command == "/start" and secrets.compare_digest(code.strip(), context.bot_data["invite_code"])
+
 
 async def gate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.effective_user:
@@ -100,7 +110,14 @@ async def gate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     limiter: RateLimiter = context.bot_data["limiter"]
     verdict = limiter.check(update.effective_user.id, time.monotonic())
     if verdict == "ok":
-        return
+        if _admitted(update, context):
+            return
+        # Strangers get one line and nothing is stored for them.
+        if update.callback_query:
+            await update.callback_query.answer()
+        elif update.effective_message:
+            await update.effective_message.reply_text(INVITE_ONLY)
+        raise ApplicationHandlerStop
     if update.callback_query:
         # Always answer a button tap, or its spinner hangs; the warning shows as a toast.
         await update.callback_query.answer(*((RATE_LIMITED,) if verdict == "warn" else ()))

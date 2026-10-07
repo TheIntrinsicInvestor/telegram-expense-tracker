@@ -4,7 +4,7 @@ import pytest
 
 from expense_bot.config import load_config
 
-PATHS = "DB_PATH=/data/x.db\nBACKUP_DIR=/data/backups\n"
+PATHS = "DB_PATH=/data/x.db\nBACKUP_DIR=/data/backups\nINVITE_CODE=abc123\n"
 
 
 @pytest.fixture
@@ -21,6 +21,8 @@ def test_load_config_defaults_to_test_token(env_file):
     assert cfg.token == "abc"
     assert cfg.db_path == Path("/data/x.db")
     assert cfg.backup_dir == Path("/data/backups")
+    assert cfg.invite_code == "abc123"
+    assert cfg.invite_code == "abc123"
 
 
 def test_load_config_live_mode_uses_live_token(env_file, monkeypatch):
@@ -46,4 +48,10 @@ def test_load_config_missing_key_raises(env_file, monkeypatch):
     env_file.write_text("TEST_TELEGRAM_TOKEN=abc\n" + PATHS, encoding="utf-8")
     monkeypatch.setenv("EXPENSE_BOT_MODE", "live")
     with pytest.raises(RuntimeError, match="LIVE_TELEGRAM_TOKEN"):
+        load_config()
+
+
+def test_load_config_requires_invite_code(env_file):
+    env_file.write_text("TEST_TELEGRAM_TOKEN=abc\nDB_PATH=/data/x.db\nBACKUP_DIR=/data/backups\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="INVITE_CODE"):
         load_config()

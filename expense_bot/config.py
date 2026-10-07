@@ -18,6 +18,7 @@ class Config:
     token: str
     db_path: Path
     backup_dir: Path
+    invite_code: str  # new users join only via t.me/<bot>?start=<invite_code>
 
 
 def load_config() -> Config:
@@ -29,11 +30,12 @@ def load_config() -> Config:
         raise RuntimeError(f"EXPENSE_BOT_MODE must be test or live, not {mode!r}")
     token_key = f"{mode.upper()}_TELEGRAM_TOKEN"
     values = dotenv_values(env_path)
-    for key in (token_key, "DB_PATH", "BACKUP_DIR"):
+    for key in (token_key, "DB_PATH", "BACKUP_DIR", "INVITE_CODE"):
         if not values.get(key):
             raise RuntimeError(f"{key} is missing from {env_path}")
     return Config(
         token=values[token_key],
         db_path=Path(values["DB_PATH"]),
         backup_dir=Path(values["BACKUP_DIR"]),
+        invite_code=values["INVITE_CODE"],
     )

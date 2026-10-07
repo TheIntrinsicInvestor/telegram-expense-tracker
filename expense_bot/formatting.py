@@ -46,6 +46,7 @@ COMMAND_ERROR = "Something went wrong, try again."
 EDIT_NOT_TRACKED = "Edits to sent messages aren't tracked. Use /recent to change an entry."
 STALE = "That entry no longer exists."
 RATE_LIMITED = "You're sending messages too fast. Wait a minute and try again."
+INVITE_ONLY = "This bot is invite-only. Ask the person who runs it for an invite link."
 NOTHING_STANDS_OUT = "Nothing stands out this period."
 
 

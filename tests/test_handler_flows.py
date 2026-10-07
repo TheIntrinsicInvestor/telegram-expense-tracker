@@ -10,7 +10,7 @@ import pytest
 from telegram.ext import ApplicationHandlerStop
 
 from expense_bot import db, handlers, jobs
-from expense_bot.formatting import RATE_LIMITED
+from expense_bot.formatting import INVITE_ONLY, RATE_LIMITED
 from expense_bot.ratelimit import RateLimiter
 
 NOW = datetime(2026, 10, 6, 12, tzinfo=timezone.utc)
@@ -31,7 +31,7 @@ def fake(conn, text=None, args=None, user_data=None, query=None):
     message = SimpleNamespace(text=text, reply_text=AsyncMock())
     update = SimpleNamespace(effective_user=SimpleNamespace(id=1), message=message, update_id=5,
                              effective_message=message, callback_query=query)
-    context = SimpleNamespace(bot_data={"conn": conn, "limiter": RateLimiter(limit=1)},
+    context = SimpleNamespace(bot_data={"conn": conn, "limiter": RateLimiter(limit=1), "invite_code": "s3cret"},
                               user_data={} if user_data is None else user_data, args=args or [])
     return update, context
 
@@ -71,6 +71,7 @@ def test_edit_mode_expires(conn):
 
 
 def test_rate_limited_button_tap_is_answered(conn):
+    db.ensure_user(conn, 1, TODAY)
     query = SimpleNamespace(answer=AsyncMock())
     update, context = fake(conn, query=query)
     run(handlers.gate, update, context)  # limit is 1: this tap is allowed
@@ -89,3 +90,32 @@ def test_recurring_starting_today_is_logged_at_once(conn):
     assert "Logged today's payment." in update.message.reply_text.call_args.args[0]
     # Already confirmed in the reply, so the hourly job doesn't announce it again.
     assert [o for o in jobs.collect_hourly(conn, NOW) if o.kind == "recurring"] == []
+
+
+@pytest.mark.parametrize("text", ["15 lunch", "/start", "/start wrong", "/help"])
+def test_stranger_is_turned_away_and_nothing_stored(conn, text):
+    update, context = fake(conn, text)
+    with pytest.raises(ApplicationHandlerStop):
+        run(handlers.gate, update, context)
+    update.message.reply_text.assert_awaited_once_with(INVITE_ONLY)
+    assert db.get_user(conn, 1) is None
+
+
+def test_stranger_button_tap_is_answered_silently(conn):
+    query = SimpleNamespace(answer=AsyncMock())
+    update, context = fake(conn, query=query)
+    update.message = None
+    with pytest.raises(ApplicationHandlerStop):
+        run(handlers.gate, update, context)
+    query.answer.assert_awaited_once_with()
+
+
+def test_invite_link_lets_a_new_user_in(conn):
+    update, context = fake(conn, "/start s3cret")
+    run(handlers.gate, update, context)  # passes through to /start, which creates the user
+
+
+def test_existing_user_needs_no_code(conn):
+    db.ensure_user(conn, 1, TODAY)
+    update, context = fake(conn, "15 lunch")
+    run(handlers.gate, update, context)
