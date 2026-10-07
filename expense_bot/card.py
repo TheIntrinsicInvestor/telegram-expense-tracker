@@ -12,7 +12,7 @@ from html import escape
 from pathlib import Path
 
 from expense_bot.money import fmt_money, round2
-from expense_bot.reports import ABOVE_USUAL_MIN, ABOVE_USUAL_RATIO, ReportData
+from expense_bot.reports import ReportData, notably_above
 
 FONTS = Path(__file__).parent / "assets" / "fonts"
 MINUS = "−"
@@ -224,7 +224,7 @@ def _categories(r: ReportData, limit: int | None = None) -> str:
             change = '<span class="chg">as usual</span>'
         else:
             # Colour only what the report itself would flag, not every penny over.
-            notable = round2(c.change) > ABOVE_USUAL_MIN and c.amount > c.usual * ABOVE_USUAL_RATIO
+            notable = notably_above(c.amount, c.usual)
             change = (f'<span class="chg num{" over" if notable else ""}">'
                       f"{escape(_signed(c.change, r.currency))}</span>")
         rows.append(

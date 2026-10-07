@@ -174,6 +174,11 @@ def _compare(kind: str, start: date, today: date, entries: list[Entry]) -> tuple
 
 # --- tips ---
 
+def notably_above(amount: float, usual: float) -> bool:
+    """Compares the figures as the user sees them (to the penny), so a displayed 1.2x never counts as over."""
+    return round2(amount - usual) > ABOVE_USUAL_MIN and round2(amount) > round2(usual * ABOVE_USUAL_RATIO)
+
+
 def _above_usual_tips(kind, categories, currency) -> list[Tip]:
     tips = []
     period_words = {"week": "this week", "lastmonth": "a month"}.get(kind, "this month")
@@ -181,7 +186,7 @@ def _above_usual_tips(kind, categories, currency) -> list[Tip]:
         if c.usual is None:
             continue
         excess = c.amount - c.usual
-        if round2(excess) > ABOVE_USUAL_MIN and c.amount > c.usual * ABOVE_USUAL_RATIO:
+        if notably_above(c.amount, c.usual):
             # The saving is the excess already spent; extrapolating it misfires on one-off payments.
             value = round2(excess)
             text = (f"{c.category} is {fmt_money(excess, currency)} above usual. "
@@ -199,7 +204,7 @@ def _repeated_tips(spent, days_elapsed, currency) -> list[Tip]:
     tips = []
     for word, amounts in groups.items():
         total = sum(amounts)
-        if len(amounts) >= REPEAT_MIN_COUNT and total / len(amounts) <= REPEAT_MAX_AVG:
+        if len(amounts) >= REPEAT_MIN_COUNT and round2(total / len(amounts)) <= REPEAT_MAX_AVG:
             value = round2(total * 365 / days_elapsed / 2)
             text = (f"{word} ×{len(amounts)} ({fmt_money(total, currency)}). "
                     f"Half as often saves about {fmt_money(value, currency)} a year.")

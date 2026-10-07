@@ -171,3 +171,15 @@ def test_fixed_costs_left_out_of_patterns():
     assert (r.weekday_avg, r.weekend_avg) == (5.0, 5.0)  # 20 over 4 weekdays, 10 over 2 weekend days
     assert [e.note for e in r.largest] == ["Lunch", "Drinks"]
     assert r.total == 906.99 and r.no_spend_days == 2  # fixed costs still count everywhere else
+
+
+def test_notably_above_compares_rounded_figures():
+    from expense_bot.reports import notably_above
+    assert notably_above(70.00, 58.33) is False  # 58.33 x 1.2 = 69.996, shown as exactly 1.2x
+    assert notably_above(70.01, 58.33) is True
+
+
+def test_repeated_tip_uses_rounded_average():
+    from expense_bot.reports import _repeated_tips
+    spent = make_entries([(a, "Eating Out", "coffee", TODAY) for a in (13.0, 13.07, 15.03, 16.92, 16.99)])
+    assert [t.kind for t in _repeated_tips(spent, 30, "GBP")] == ["repeated"]  # average shows as £15.00
