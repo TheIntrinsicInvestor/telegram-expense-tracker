@@ -8,7 +8,7 @@ from expense_bot.money import round2
 from expense_bot.recurring import FREQUENCIES
 
 HELP_EXAMPLE = (
-    "Not quite! Start with the amount, then what it was:\n\n"
+    "Not quite! Send the amount and what it was, in any order:\n\n"
     "15 lunch  (today)\n"
     "12 taxi 03/10  (a past date)\n"
     "150 flights 31/12/26  (planned)"
@@ -19,6 +19,8 @@ RECURRING_HELP = "Try /recurring 12 netflix monthly or /recurring 950 rent month
 DATE_RANGE_ERROR = "Use a date from last year up to 10 years ahead."
 RECURRING_START_ERROR = "A recurring payment can start at most 31 days ago."
 NOTE_TOO_LONG = "Keep the note under 200 characters."
+AMBIGUOUS_AMOUNT = "Which number is the amount? Put it first, like: 15 train zone 2"
+TWO_DATES_ERROR = "Use one date per entry."
 
 MAX_AMOUNT = 1_000_000
 BACKFILL_DAYS = 7
@@ -110,31 +112,53 @@ def resolve_date(token: str, today: date) -> date | ParseError | None:
     return ParseError(BAD_DATE_ERROR)
 
 
-def parse_entry(text: str, today: date) -> ParsedEntry | ParseError:
-    tokens = text.split()
-    if not tokens:
-        return ParseError(HELP_EXAMPLE)
+def _take_date(tokens: list[str], today: date) -> tuple[date | None, list[str]] | ParseError:
+    """Finds the one date word anywhere in the message; returns it and the other words."""
+    found, rest = None, []
+    for token in tokens:
+        when = resolve_date(token, today)
+        if isinstance(when, ParseError):
+            return when
+        if when is None:
+            rest.append(token)
+        elif found is not None:
+            return ParseError(TWO_DATES_ERROR)
+        else:
+            found = when
+    return found, rest
 
-    entry_date = today
-    when = resolve_date(tokens[-1], today)
-    if isinstance(when, ParseError):
-        return when
-    if when is not None:
-        entry_date = when
-        tokens = tokens[:-1]
-    if not tokens:
-        return ParseError(HELP_EXAMPLE)
 
-    amount = parse_amount(tokens[0])
-    if amount is not None:
-        rest = tokens[1:]
+def _take_amount(tokens: list[str], help_text: str) -> tuple[float, list[str]] | ParseError:
+    """The amount is the first word if it is a number, else the last, else the only number anywhere."""
+    if not tokens:
+        return ParseError(help_text)
+    for i in (0, len(tokens) - 1):
+        amount = parse_amount(tokens[i])
+        if amount is not None:
+            break
     else:
-        amount = parse_amount(tokens[-1])
-        rest = tokens[:-1]
-    if amount is None:
-        return ParseError(HELP_EXAMPLE)
+        found = [(i, a) for i, t in enumerate(tokens) if (a := parse_amount(t)) is not None]
+        if not found:
+            return ParseError(help_text)
+        if len(found) > 1:
+            return ParseError(AMBIGUOUS_AMOUNT)
+        i, amount = found[0]
     if isinstance(amount, ParseError):
         return amount
+    return amount, tokens[:i] + tokens[i + 1:]
+
+
+def parse_entry(text: str, today: date) -> ParsedEntry | ParseError:
+    """Amount, note and an optional date, in any order."""
+    taken = _take_date(text.split(), today)
+    if isinstance(taken, ParseError):
+        return taken
+    when, tokens = taken
+    taken = _take_amount(tokens, HELP_EXAMPLE)
+    if isinstance(taken, ParseError):
+        return taken
+    amount, rest = taken
+    entry_date = when or today
     note = tidy_note(rest)
     if len(note) > MAX_NOTE_LENGTH:
         return ParseError(NOTE_TOO_LONG)
@@ -142,26 +166,24 @@ def parse_entry(text: str, today: date) -> ParsedEntry | ParseError:
 
 
 def parse_recurring(args: list[str], today: date) -> ParsedRecurring | ParseError:
-    """Parses '/recurring <amount> <note...> <weekly|monthly|yearly> [start date]'. Start defaults to today."""
-    tokens = list(args)
-    start = today
-    if tokens:
-        when = resolve_date(tokens[-1], today)
-        if isinstance(when, ParseError):
-            return when
-        if when is not None:
-            start = when
-            tokens = tokens[:-1]
+    """Parses '/recurring' args: amount, note, weekly|monthly|yearly and an optional start date, in any order.
+    Start defaults to today."""
+    taken = _take_date(list(args), today)
+    if isinstance(taken, ParseError):
+        return taken
+    when, tokens = taken
+    start = when or today
     if (today - start).days > RECURRING_MAX_DAYS_BACK:
         return ParseError(RECURRING_START_ERROR)
-    if len(tokens) < 2 or tokens[-1].lower() not in FREQUENCIES:
+    frequencies = [t for t in tokens if t.lower() in FREQUENCIES]
+    if len(frequencies) != 1:
         return ParseError(RECURRING_HELP)
-    amount = parse_amount(tokens[0])
-    if amount is None:
-        return ParseError(RECURRING_HELP)
-    if isinstance(amount, ParseError):
-        return amount
-    note = tidy_note(tokens[1:-1])
+    tokens.remove(frequencies[0])
+    taken = _take_amount(tokens, RECURRING_HELP)
+    if isinstance(taken, ParseError):
+        return taken
+    amount, rest = taken
+    note = tidy_note(rest)
     if len(note) > MAX_NOTE_LENGTH:
         return ParseError(NOTE_TOO_LONG)
-    return ParsedRecurring(amount, note, tokens[-1].lower(), start)
+    return ParsedRecurring(amount, note, frequencies[0].lower(), start)

@@ -3,12 +3,14 @@ from datetime import date
 import pytest
 
 from expense_bot.parser import (
+    AMBIGUOUS_AMOUNT,
     AMOUNT_RANGE_ERROR,
     BAD_DATE_ERROR,
     HELP_EXAMPLE,
     MAX_NOTE_LENGTH,
     NOTE_TOO_LONG,
     RECURRING_HELP,
+    TWO_DATES_ERROR,
     ParsedEntry,
     ParsedRecurring,
     ParseError,
@@ -40,6 +42,18 @@ TODAY = date(2026, 10, 6)
         ("5 x 1/2/27", ParsedEntry(5.0, "X", date(2027, 2, 1))),
         ("20 groceries yesterday", ParsedEntry(20.0, "Groceries", date(2026, 10, 5))),
         ("20 groceries Today", ParsedEntry(20.0, "Groceries", TODAY)),
+        ("673.4 12/12/26 LSE Ski Trip", ParsedEntry(673.4, "LSE Ski Trip", date(2026, 12, 12))),
+        ("12/12/26 LSE Ski Trip 673.4", ParsedEntry(673.4, "LSE Ski Trip", date(2026, 12, 12))),
+        ("LSE 673.4 Ski Trip", ParsedEntry(673.4, "LSE Ski Trip", TODAY)),
+        ("lunch yesterday with Sam 12", ParsedEntry(12.0, "Lunch with Sam", date(2026, 10, 5))),
+        ("yesterday 20 groceries", ParsedEntry(20.0, "Groceries", date(2026, 10, 5))),
+        ("15 train zone 2", ParsedEntry(15.0, "Train zone 2", TODAY)),
+        ("train zone 2 15", ParsedEntry(15.0, "Train zone 2", TODAY)),
+        ("coffee x2 4.50", ParsedEntry(4.5, "Coffee x2", TODAY)),
+        ("train 2 zone 3 x", ParseError(AMBIGUOUS_AMOUNT)),
+        ("50 flights 12/12 return 19/12", ParseError(TWO_DATES_ERROR)),
+        ("50 flights today 12/12", ParseError(TWO_DATES_ERROR)),
+        ("10 31/02 x", ParseError(BAD_DATE_ERROR)),
         ("10 x 29/02/28", ParsedEntry(10.0, "X", date(2028, 2, 29))),
         ("10 x 29/02", ParsedEntry(10.0, "X", date(2028, 2, 29))),
         ("10 x 31/02", ParseError(BAD_DATE_ERROR)),
@@ -73,6 +87,11 @@ def test_year_rollover_backfill():
         (["950", "rent", "monthly", "01/11"], ParsedRecurring(950.0, "Rent", "monthly", date(2026, 11, 1))),
         (["5", "Pret", "coffee", "Weekly"], ParsedRecurring(5.0, "Pret coffee", "weekly", TODAY)),
         (["120", "insurance", "yearly", "today"], ParsedRecurring(120.0, "Insurance", "yearly", TODAY)),
+        (["netflix", "monthly", "12"], ParsedRecurring(12.0, "Netflix", "monthly", TODAY)),
+        (["monthly", "01/11", "950", "rent"], ParsedRecurring(950.0, "Rent", "monthly", date(2026, 11, 1))),
+        (["rent", "01/11", "monthly", "950"], ParsedRecurring(950.0, "Rent", "monthly", date(2026, 11, 1))),
+        (["12", "netflix", "monthly", "weekly"], ParseError(RECURRING_HELP)),
+        (["12", "netflix", "monthly", "01/11", "02/11"], ParseError(TWO_DATES_ERROR)),
         (["12", "netflix"], ParseError(RECURRING_HELP)),
         (["netflix", "monthly"], ParseError(RECURRING_HELP)),
         ([], ParseError(RECURRING_HELP)),
@@ -112,7 +131,7 @@ def test_note_first_letter_capitalised(text, note):
 
 def test_help_example_is_a_cheat_sheet():
     assert HELP_EXAMPLE == (
-        "Not quite! Start with the amount, then what it was:\n\n"
+        "Not quite! Send the amount and what it was, in any order:\n\n"
         "15 lunch  (today)\n"
         "12 taxi 03/10  (a past date)\n"
         "150 flights 31/12/26  (planned)"
